@@ -1,0 +1,189 @@
+{
+  "stages": [
+    {
+      "code": "INITIAL_REVIEW",
+      "name": "Initial Review",
+      "description": "Preliminary verification of applicant identity, income, and property details.",
+      "sequence_order": 1,
+      "activities": [
+        {
+          "code": "IDENTITY_VERIFICATION",
+          "name": "Identity Verification",
+          "description": "Verify the applicant's identity documents and KYC compliance.",
+          "sequence_order": 1,
+          "task_definitions": [
+            {
+              "code": "COLLECT_ID_DOCS",
+              "name": "Collect Identity Documents",
+              "description": "Upload passport, drivers licence, or national ID.",
+              "type": "USER",
+              "required": true,
+              "sequence_order": 1,
+              "config": {
+                "ui": {
+                  "component": "FileUploadForm",
+                  "accepted_types": ["image/jpeg", "image/png", "application/pdf"],
+                  "max_files": 3
+                }
+              }
+            },
+            {
+              "code": "RUN_KYC_CHECK",
+              "name": "Run KYC Check",
+              "description": "Automated KYC/AML screening against government databases.",
+              "type": "SYSTEM",
+              "required": true,
+              "sequence_order": 2,
+              "config": {
+                "integration": {
+                  "endpoint": "https://api.kyc-provider.io/v2/verify",
+                  "method": "POST",
+                  "timeout_seconds": 30,
+                  "retry_policy": {
+                    "max_retries": 3,
+                    "backoff_ms": 1000
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "code": "INCOME_ASSESSMENT",
+          "name": "Income Assessment",
+          "description": "Validate the applicant's income and employment status.",
+          "sequence_order": 2,
+          "task_definitions": [
+            {
+              "code": "UPLOAD_PAY_STUBS",
+              "name": "Upload Pay Stubs",
+              "description": "Applicant uploads their last 3 months of pay stubs.",
+              "type": "USER",
+              "required": true,
+              "sequence_order": 1,
+              "config": {
+                "ui": {
+                  "component": "FileUploadForm",
+                  "accepted_types": ["application/pdf"],
+                  "max_files": 6,
+                  "instructions": "Please upload your most recent 3 months of pay stubs."
+                }
+              }
+            },
+            {
+              "code": "VERIFY_EMPLOYMENT",
+              "name": "Verify Employment",
+              "description": "System call to employer verification service.",
+              "type": "SYSTEM",
+              "required": true,
+              "sequence_order": 2,
+              "config": {
+                "integration": {
+                  "endpoint": "https://api.employment-check.io/v1/verify",
+                  "method": "POST",
+                  "timeout_seconds": 60,
+                  "retry_policy": {
+                    "max_retries": 2,
+                    "backoff_ms": 2000
+                  }
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "code": "CREDIT_ASSESSMENT",
+      "name": "Credit Assessment",
+      "description": "Full credit evaluation including bureau pull and property valuation.",
+      "sequence_order": 2,
+      "activities": [
+        {
+          "code": "CREDIT_BUREAU_PULL",
+          "name": "Credit Bureau Pull",
+          "description": "Retrieve credit history and scores from bureau providers.",
+          "sequence_order": 1,
+          "task_definitions": [
+            {
+              "code": "REQUEST_CREDIT_REPORT",
+              "name": "Request Credit Report",
+              "description": "Automated pull from credit bureau API.",
+              "type": "SYSTEM",
+              "required": true,
+              "sequence_order": 1,
+              "config": {
+                "integration": {
+                  "endpoint": "https://api.credit-bureau.io/v3/report",
+                  "method": "POST",
+                  "timeout_seconds": 45,
+                  "retry_policy": {
+                    "max_retries": 3,
+                    "backoff_ms": 1500
+                  }
+                }
+              }
+            },
+            {
+              "code": "REVIEW_CREDIT_REPORT",
+              "name": "Review Credit Report",
+              "description": "Underwriter manually reviews edge-case credit reports.",
+              "type": "USER",
+              "required": false,
+              "sequence_order": 2,
+              "config": {
+                "ui": {
+                  "component": "CreditReportViewer",
+                  "role_required": "UNDERWRITER",
+                  "sla_hours": 24
+                }
+              }
+            }
+          ]
+        },
+        {
+          "code": "PROPERTY_VALUATION",
+          "name": "Property Valuation",
+          "description": "Assess the market value of the property being financed.",
+          "sequence_order": 2,
+          "task_definitions": [
+            {
+              "code": "ORDER_APPRAISAL",
+              "name": "Order Property Appraisal",
+              "description": "Dispatch an automated valuation model (AVM) request.",
+              "type": "SYSTEM",
+              "required": true,
+              "sequence_order": 1,
+              "config": {
+                "integration": {
+                  "endpoint": "https://api.property-valuation.io/v1/avm",
+                  "method": "POST",
+                  "timeout_seconds": 120,
+                  "retry_policy": {
+                    "max_retries": 2,
+                    "backoff_ms": 5000
+                  }
+                }
+              }
+            },
+            {
+              "code": "CONFIRM_VALUATION",
+              "name": "Confirm Valuation",
+              "description": "Loan officer reviews and confirms the valuation outcome.",
+              "type": "USER",
+              "required": true,
+              "sequence_order": 2,
+              "config": {
+                "ui": {
+                  "component": "ValuationReviewForm",
+                  "role_required": "LOAN_OFFICER",
+                  "sla_hours": 48
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

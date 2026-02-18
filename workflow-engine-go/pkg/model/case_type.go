@@ -53,6 +53,9 @@ type CaseTypeConfig struct {
 	SubCaseTypes      []string            `json:"sub_case_types,omitempty"` // e.g. ["CREDIT_CHECK", "VALUATION"]
 	DefaultCalendarID string              `json:"default_calendar_id,omitempty"`
 	SLA               *SLAHierarchyConfig `json:"sla,omitempty"`
+	ApprovalChain     []ApprovalChainTierDefinition `json:"approval_chain,omitempty"`
+	FallbackSupervisorRole string `json:"fallback_supervisor_role,omitempty"`
+	MaxReworkAttempts int `json:"max_rework_attempts,omitempty"`
 }
 
 // Scan implements the sql.Scanner interface so pgx can read JSONB into this struct.
@@ -115,4 +118,6 @@ type TaskDefinitionV2 struct {
 	SequenceOrder int             `json:"sequence_order"`
 	Config        json.RawMessage `json:"config,omitempty"` // UI hints, endpoints, timeouts, etc.
 	SLA           *SLADefinition  `json:"sla,omitempty"`
+	RequiresApproval bool         `json:"requires_approval,omitempty"`
+	Approval         *ApprovalDefinition `json:"approval,omitempty"`
 }

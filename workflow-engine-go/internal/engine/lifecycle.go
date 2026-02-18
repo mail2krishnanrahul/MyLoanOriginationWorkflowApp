@@ -44,6 +44,7 @@ func (e *Engine) ValidateLifecycleTransition(
 		// Terminals cannot transition
 		model.CaseStatusCompleted: {},
 		model.CaseStatusCancelled: {},
+		model.CaseStatusRejected:  {},
 	}
 
 	if validTargets, ok := allowed[currentStatus]; ok {

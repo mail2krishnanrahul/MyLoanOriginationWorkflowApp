@@ -19,7 +19,7 @@ func (r *Repository) GetCaseInstance(ctx context.Context, tx DBExecutor, caseID 
 	err := tx.QueryRow(ctx, `
 		SELECT id, reference_number, case_type_id, case_type_version,
 		       parent_case_id, source_case_id, current_stage_code, current_stage_ordinal,
-		       status, metadata, assigned_to, row_version,
+		       status, metadata, assigned_to, rework_count, max_rework_attempts, row_version,
 		       created_at, updated_at, completed_at,
 		       suspend_reason, resume_at, withdrawal_reason,
 		       emergency_closed_at, emergency_reason, supervisor_id
@@ -28,7 +28,7 @@ func (r *Repository) GetCaseInstance(ctx context.Context, tx DBExecutor, caseID 
 	).Scan(
 		&c.ID, &c.ReferenceNumber, &c.CaseTypeID, &c.CaseTypeVersion,
 		&c.ParentCaseID, &c.SourceCaseID, &c.CurrentStageCode, &c.CurrentStageOrdinal,
-		&c.Status, &c.Metadata, &c.AssignedTo, &c.RowVersion,
+		&c.Status, &c.Metadata, &c.AssignedTo, &c.ReworkCount, &c.MaxReworkAttempts, &c.RowVersion,
 		&c.CreatedAt, &c.UpdatedAt, &c.CompletedAt,
 		&c.SuspendReason, &c.ResumeAt, &c.WithdrawalReason,
 		&c.EmergencyClosedAt, &c.EmergencyReason, &c.SupervisorID,
@@ -49,7 +49,7 @@ func (r *Repository) GetCaseInstanceWithLock(ctx context.Context, tx DBExecutor,
 	err := tx.QueryRow(ctx, `
 		SELECT id, reference_number, case_type_id, case_type_version,
 		       parent_case_id, source_case_id, current_stage_code, current_stage_ordinal,
-		       status, metadata, assigned_to, row_version,
+		       status, metadata, assigned_to, rework_count, max_rework_attempts, row_version,
 		       created_at, updated_at, completed_at,
 		       suspend_reason, resume_at, withdrawal_reason,
 		       emergency_closed_at, emergency_reason, supervisor_id
@@ -59,7 +59,7 @@ func (r *Repository) GetCaseInstanceWithLock(ctx context.Context, tx DBExecutor,
 	).Scan(
 		&c.ID, &c.ReferenceNumber, &c.CaseTypeID, &c.CaseTypeVersion,
 		&c.ParentCaseID, &c.SourceCaseID, &c.CurrentStageCode, &c.CurrentStageOrdinal,
-		&c.Status, &c.Metadata, &c.AssignedTo, &c.RowVersion,
+		&c.Status, &c.Metadata, &c.AssignedTo, &c.ReworkCount, &c.MaxReworkAttempts, &c.RowVersion,
 		&c.CreatedAt, &c.UpdatedAt, &c.CompletedAt,
 		&c.SuspendReason, &c.ResumeAt, &c.WithdrawalReason,
 		&c.EmergencyClosedAt, &c.EmergencyReason, &c.SupervisorID,

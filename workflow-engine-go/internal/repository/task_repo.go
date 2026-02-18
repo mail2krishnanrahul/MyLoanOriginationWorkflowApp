@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
+	"workflow-engine/internal/approval"
 	"workflow-engine/internal/sla"
 	"workflow-engine/pkg/model"
 
@@ -47,13 +49,13 @@ func (r *Repository) CreateTask(ctx context.Context, tx DBExecutor, task model.T
 			status, priority, assigned_service,
 			due_at, max_retries,
 			input_payload, output_payload, metadata,
-			idempotency_key
+			idempotency_key, requires_approval, approval_amount
 		) VALUES (
 			$1::uuid, $2, $3, $4,
 			$5, $6, $7,
 			$8, $9,
 			$10, $11, $12,
-			$13
+			$13, $14, $15
 		)
 		ON CONFLICT (idempotency_key) DO NOTHING
 		RETURNING id`,
@@ -61,7 +63,7 @@ func (r *Repository) CreateTask(ctx context.Context, tx DBExecutor, task model.T
 		string(task.Status), int(task.Priority), task.AssignedService,
 		task.DueAt, task.MaxRetries,
 		task.InputPayload, task.OutputPayload, task.Metadata,
-		task.IdempotencyKey,
+		task.IdempotencyKey, task.RequiresApproval, task.ApprovalAmount,
 	).Scan(&id)
 
 	if err != nil {
@@ -84,6 +86,7 @@ func (r *Repository) getTaskByIdempotencyKey(ctx context.Context, tx DBExecutor,
 	var priority int
 	err := tx.QueryRow(ctx, `
 		SELECT id, case_id, task_definition_code, activity_code, stage_code,
+		       requires_approval, approval_gate_id::text, approval_amount,
 		       status, priority, assigned_service,
 		       assigned_at, started_at, completed_at, due_at,
 		       retry_count, max_retries,
@@ -93,6 +96,7 @@ func (r *Repository) getTaskByIdempotencyKey(ctx context.Context, tx DBExecutor,
 		WHERE idempotency_key = $1`, key,
 	).Scan(
 		&t.ID, &t.CaseID, &t.TaskDefinitionCode, &t.ActivityCode, &t.StageCode,
+		&t.RequiresApproval, &t.ApprovalGateID, &t.ApprovalAmount,
 		&status, &priority, &t.AssignedService,
 		&t.AssignedAt, &t.StartedAt, &t.CompletedAt, &t.DueAt,
 		&t.RetryCount, &t.MaxRetries,
@@ -126,6 +130,8 @@ func (r *Repository) UpdateTaskStatus(
 	var currentStatus string
 	var currentVersion int
 	var caseID string
+	var requiresApproval bool
+	var approvalGateID *string
 	var effectiveStart time.Time
 	var calendarID *string
 	var durationMS *int64
@@ -133,13 +139,15 @@ func (r *Repository) UpdateTaskStatus(
 		SELECT status,
 		       version,
 		       case_id::text,
+		       requires_approval,
+		       approval_gate_id::text,
 		       COALESCE(effective_start_time, created_at) AS effective_start_time,
 		       sla_calendar_id::text AS sla_calendar_id,
 		       sla_duration_ms
 		FROM tasks
 		WHERE id = $1::uuid
 		FOR UPDATE`, taskID,
-	).Scan(&currentStatus, &currentVersion, &caseID, &effectiveStart, &calendarID, &durationMS)
+	).Scan(&currentStatus, &currentVersion, &caseID, &requiresApproval, &approvalGateID, &effectiveStart, &calendarID, &durationMS)
 	if err != nil {
 		return fmt.Errorf("failed to lock task %s: %w", taskID, err)
 	}
@@ -148,6 +156,14 @@ func (r *Repository) UpdateTaskStatus(
 	current := model.TaskStatus(currentStatus)
 	if current.IsTerminal() {
 		return fmt.Errorf("task %s is in terminal status %s", taskID, currentStatus)
+	}
+	if newStatus == model.TaskStatusDone && requiresApproval {
+		if approvalGateID == nil || strings.TrimSpace(*approvalGateID) == "" {
+			return fmt.Errorf("task %s requires approval but has no approval_gate_id", taskID)
+		}
+		if err := r.ensureApprovalGateSatisfied(ctx, tx, *approvalGateID); err != nil {
+			return fmt.Errorf("task %s completion blocked: %w", taskID, err)
+		}
 	}
 
 	// 3. Compute timestamp updates based on new status
@@ -184,6 +200,15 @@ func (r *Repository) UpdateTaskStatus(
 	}
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("optimistic lock failure on task %s (version %d)", taskID, currentVersion)
+	}
+
+	if newStatus == model.TaskStatusInProgress && requiresApproval {
+		if approvalGateID == nil || strings.TrimSpace(*approvalGateID) == "" {
+			return fmt.Errorf("task %s requires approval but has no approval gate", taskID)
+		}
+		if err := r.activateApprovalGate(ctx, tx, taskID, caseID, *approvalGateID); err != nil {
+			return fmt.Errorf("failed to activate approval gate %s for task %s: %w", *approvalGateID, taskID, err)
+		}
 	}
 
 	// SLA pause/resume hooks on status transitions.
@@ -301,6 +326,301 @@ func (r *Repository) UpdateTaskStatus(
 		}); err != nil {
 			return fmt.Errorf("failed to publish SLA_PAUSED for task %s: %w", taskID, err)
 		}
+	}
+
+	return nil
+}
+
+func (r *Repository) ensureApprovalGateSatisfied(ctx context.Context, tx DBExecutor, gateID string) error {
+	var gateStatus string
+	err := tx.QueryRow(ctx, `
+		SELECT gate_status
+		FROM approval_gates
+		WHERE id = $1::uuid
+		FOR UPDATE
+	`, gateID).Scan(&gateStatus)
+	if err != nil {
+		return fmt.Errorf("ensureApprovalGateSatisfied: load gate: %w", err)
+	}
+	switch model.ApprovalGateStatus(gateStatus) {
+	case model.ApprovalGateStatusSatisfied:
+		return nil
+	case model.ApprovalGateStatusFailed, model.ApprovalGateStatusRejected, model.ApprovalGateStatusRejectedReworkInitiated, model.ApprovalGateStatusExpired:
+		return fmt.Errorf("approval gate %s is %s", gateID, gateStatus)
+	default:
+		return fmt.Errorf("approval gate %s is not satisfied (status=%s)", gateID, gateStatus)
+	}
+}
+
+func (r *Repository) activateApprovalGate(ctx context.Context, tx DBExecutor, taskID string, caseID string, gateID string) error {
+	type gateRow struct {
+		GateStatus             string
+		ApproverSelection      string
+		Approvers              []byte
+		AuthorityLimit         *float64
+		ApprovalAmount         *float64
+		ApprovalTimeoutHours   float64
+		OnTimeoutAction        string
+		RejectionBehavior      string
+		ReworkTargetStageCode  *string
+		FallbackSupervisorRole *string
+		DynamicRuleExpression  *string
+		ChainDefinition        []byte
+	}
+	var gate gateRow
+	if err := tx.QueryRow(ctx, `
+		SELECT
+			gate_status,
+			approver_selection,
+			approvers,
+			authority_limit,
+			approval_amount,
+			approval_timeout_hours,
+			on_timeout_action,
+			rejection_behavior,
+			rework_target_stage_code,
+			fallback_supervisor_role,
+			dynamic_rule_expression,
+			chain_definition
+		FROM approval_gates
+		WHERE id = $1::uuid
+		FOR UPDATE
+	`, gateID).Scan(
+		&gate.GateStatus,
+		&gate.ApproverSelection,
+		&gate.Approvers,
+		&gate.AuthorityLimit,
+		&gate.ApprovalAmount,
+		&gate.ApprovalTimeoutHours,
+		&gate.OnTimeoutAction,
+		&gate.RejectionBehavior,
+		&gate.ReworkTargetStageCode,
+		&gate.FallbackSupervisorRole,
+		&gate.DynamicRuleExpression,
+		&gate.ChainDefinition,
+	); err != nil {
+		return fmt.Errorf("activateApprovalGate: load gate: %w", err)
+	}
+
+	switch model.ApprovalGateStatus(gate.GateStatus) {
+	case model.ApprovalGateStatusSatisfied:
+		return nil
+	case model.ApprovalGateStatusFailed, model.ApprovalGateStatusRejected, model.ApprovalGateStatusRejectedReworkInitiated, model.ApprovalGateStatusExpired:
+		return fmt.Errorf("activateApprovalGate: gate %s is terminal with status %s", gateID, gate.GateStatus)
+	}
+
+	var pending int
+	if err := tx.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM approval_requests
+		WHERE approval_gate_id = $1::uuid
+		  AND status = 'PENDING'
+	`, gateID).Scan(&pending); err != nil {
+		return fmt.Errorf("activateApprovalGate: count pending requests: %w", err)
+	}
+	if pending > 0 {
+		_, err := tx.Exec(ctx, `
+			UPDATE approval_gates
+			SET gate_status = 'ACTIVE',
+			    opened_at = COALESCE(opened_at, now()),
+			    updated_at = now(),
+			    version = version + 1
+			WHERE id = $1::uuid
+		`, gateID)
+		if err != nil {
+			return fmt.Errorf("activateApprovalGate: mark active: %w", err)
+		}
+		return nil
+	}
+
+	var caseMetadata []byte
+	var assignedTo *string
+	var calendarID *string
+	err := tx.QueryRow(ctx, `
+		SELECT metadata, assigned_to, case_sla_calendar_id::text
+		FROM cases
+		WHERE id = $1::uuid
+	`, caseID).Scan(&caseMetadata, &assignedTo, &calendarID)
+	if err != nil {
+		return fmt.Errorf("activateApprovalGate: load case data: %w", err)
+	}
+
+	caseInst := model.CaseInstance{
+		ID:         caseID,
+		Metadata:   caseMetadata,
+		AssignedTo: assignedTo,
+	}
+	gateModel := model.ApprovalGate{
+		ID:                     gateID,
+		TaskID:                 taskID,
+		CaseID:                 caseID,
+		ApproverSelection:      model.ApproverSelection(gate.ApproverSelection),
+		Approvers:              gate.Approvers,
+		AuthorityLimit:         gate.AuthorityLimit,
+		ApprovalAmount:         gate.ApprovalAmount,
+		ApprovalTimeoutHours:   gate.ApprovalTimeoutHours,
+		OnTimeoutAction:        model.TimeoutAction(gate.OnTimeoutAction),
+		RejectionBehavior:      model.RejectionBehavior(gate.RejectionBehavior),
+		ReworkTargetStageCode:  gate.ReworkTargetStageCode,
+		FallbackSupervisorRole: gate.FallbackSupervisorRole,
+		DynamicRuleExpression:  gate.DynamicRuleExpression,
+		ChainDefinition:        gate.ChainDefinition,
+	}
+	if gateModel.ApprovalTimeoutHours <= 0 {
+		gateModel.ApprovalTimeoutHours = 24
+	}
+
+	if r.SQLX == nil {
+		return fmt.Errorf("activateApprovalGate: sqlx is not configured")
+	}
+	approverIDs, err := approval.SelectApprovers(ctx, r.SQLX, gateModel, caseInst)
+	if err != nil {
+		if err == model.ErrNoEligibleApprover {
+			if gate.FallbackSupervisorRole != nil && strings.TrimSpace(*gate.FallbackSupervisorRole) != "" {
+				var fallbackUser string
+				fallbackErr := tx.QueryRow(ctx, `
+					SELECT id
+					FROM users
+					WHERE role_code = $1
+					  AND status = 'ACTIVE'
+					ORDER BY created_at ASC
+					LIMIT 1
+				`, strings.TrimSpace(*gate.FallbackSupervisorRole)).Scan(&fallbackUser)
+				if fallbackErr == nil && fallbackUser != "" {
+					approverIDs = []string{fallbackUser}
+					err = nil
+				}
+			}
+		}
+		if err != nil {
+			if err == model.ErrNoEligibleApprover {
+				payload, _ := json.Marshal(map[string]interface{}{
+					"gate_id":      gateID,
+					"case_id":      caseID,
+					"task_id":      taskID,
+					"event_reason": "no_eligible_approver",
+				})
+				_ = r.PublishEvent(ctx, tx, model.Event{
+					CaseID:    &caseID,
+					TaskID:    &taskID,
+					EventType: model.EventNoEligibleApprover,
+					Payload:   payload,
+					Status:    model.EventStatusPending,
+				})
+			}
+			return fmt.Errorf("activateApprovalGate: select approvers: %w", err)
+		}
+	}
+	if len(approverIDs) == 0 {
+		return fmt.Errorf("activateApprovalGate: %w", model.ErrNoEligibleApprover)
+	}
+
+	timeoutDuration := time.Duration(gateModel.ApprovalTimeoutHours * float64(time.Hour))
+	if timeoutDuration <= 0 {
+		timeoutDuration = 24 * time.Hour
+	}
+	expiresAt := time.Now().UTC().Add(timeoutDuration)
+	if calendarID != nil && strings.TrimSpace(*calendarID) != "" {
+		if dueAt, calErr := sla.AddBusinessHours(ctx, r.SQLX, time.Now().UTC(), timeoutDuration, *calendarID); calErr == nil {
+			expiresAt = dueAt
+		}
+	}
+
+	var tier interface{}
+	if len(gateModel.ChainDefinition) > 0 {
+		var tiers []model.ApprovalChainTierDefinition
+		if err := json.Unmarshal(gateModel.ChainDefinition, &tiers); err == nil && len(tiers) > 0 {
+			tier = tiers[0].Tier
+		}
+	}
+
+	for _, approverID := range approverIDs {
+		var requestID string
+		err := tx.QueryRow(ctx, `
+			INSERT INTO approval_requests (
+				approval_gate_id,
+				approver_id,
+				tier,
+				status,
+				evidence_refs,
+				expires_at,
+				delegation_chain
+			)
+			VALUES (
+				$1::uuid,
+				$2,
+				$3,
+				'PENDING',
+				'[]'::jsonb,
+				$4,
+				'[]'::jsonb
+			)
+			RETURNING id::text
+		`, gateID, approverID, tier, expiresAt).Scan(&requestID)
+		if err != nil {
+			// Ignore duplicate pending rows on retry/idempotent activation.
+			if !strings.Contains(strings.ToLower(err.Error()), "duplicate") {
+				return fmt.Errorf("activateApprovalGate: insert request for approver %s: %w", approverID, err)
+			}
+		}
+
+		if strings.TrimSpace(requestID) != "" {
+			_, _ = tx.Exec(ctx, `
+				INSERT INTO approval_audit_log (
+					approval_request_id,
+					event_type,
+					actor_id,
+					evidence_refs,
+					previous_state,
+					new_state
+				)
+				VALUES ($1::uuid, 'REQUESTED', 'SYSTEM', '[]'::jsonb, 'PENDING', 'PENDING')
+			`, requestID)
+		}
+
+		payload, _ := json.Marshal(map[string]interface{}{
+			"gate_id":         gateID,
+			"request_id":      requestID,
+			"case_id":         caseID,
+			"task_id":         taskID,
+			"approver_id":     approverID,
+			"request_status":  string(model.ApprovalRequestStatusPending),
+			"event_reason":    "approval_requested",
+			"approval_expires": expiresAt,
+		})
+		if err := r.PublishEvent(ctx, tx, model.Event{
+			CaseID:    &caseID,
+			TaskID:    &taskID,
+			EventType: model.EventApprovalRequested,
+			Payload:   payload,
+			Status:    model.EventStatusPending,
+		}); err != nil {
+			return fmt.Errorf("activateApprovalGate: publish APPROVAL_REQUESTED: %w", err)
+		}
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE approval_gates
+		SET gate_status = 'ACTIVE',
+		    opened_at = COALESCE(opened_at, now()),
+		    updated_at = now(),
+		    version = version + 1
+		WHERE id = $1::uuid
+	`, gateID); err != nil {
+		return fmt.Errorf("activateApprovalGate: update gate active: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE tasks
+		SET status = CASE
+			WHEN status = 'IN_PROGRESS' THEN 'AWAITING_EXTERNAL'
+			ELSE status
+		END,
+		    updated_at = now(),
+		    version = version + 1
+		WHERE id = $1::uuid
+	`, taskID); err != nil {
+		return fmt.Errorf("activateApprovalGate: update task waiting status: %w", err)
 	}
 
 	return nil

@@ -46,6 +46,20 @@ const (
 	EventSLAResumed  EventType = "SLA_RESUMED"
 	EventSLAReset    EventType = "SLA_RESET"
 	EventSLAExtended EventType = "SLA_EXTENDED"
+
+	// Approval Events
+	EventApprovalGateCreated  EventType = "APPROVAL_GATE_CREATED"
+	EventApprovalRequested    EventType = "APPROVAL_REQUESTED"
+	EventApprovalGranted      EventType = "APPROVAL_GRANTED"
+	EventApprovalRejected     EventType = "APPROVAL_REJECTED"
+	EventApprovalDelegated    EventType = "APPROVAL_DELEGATED"
+	EventApprovalExpired      EventType = "APPROVAL_EXPIRED"
+	EventApprovalGateSatisfied EventType = "APPROVAL_GATE_SATISFIED"
+	EventApprovalGateFailed   EventType = "APPROVAL_GATE_FAILED"
+	EventCaseSentToRework     EventType = "CASE_SENT_TO_REWORK"
+	EventCaseRejected         EventType = "CASE_REJECTED"
+	EventCaseMaxReworkExceeded EventType = "CASE_MAX_REWORK_EXCEEDED"
+	EventNoEligibleApprover   EventType = "NO_ELIGIBLE_APPROVER"
 )
 
 // ---------------------------------------------------------------------------

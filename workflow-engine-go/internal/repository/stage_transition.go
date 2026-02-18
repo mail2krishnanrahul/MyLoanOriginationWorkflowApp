@@ -40,7 +40,7 @@ func (r *Repository) RecordStageTransition(ctx context.Context, tx DBExecutor, i
 	// ---------------------------------------------------------------
 	// 2. Guard: terminal cases cannot transition
 	// ---------------------------------------------------------------
-	if caseStatus == model.CaseStatusCompleted || caseStatus == model.CaseStatusCancelled {
+	if caseStatus == model.CaseStatusCompleted || caseStatus == model.CaseStatusCancelled || caseStatus == model.CaseStatusRejected {
 		return fmt.Errorf("case %s is in terminal status %s", input.CaseID, caseStatus)
 	}
 

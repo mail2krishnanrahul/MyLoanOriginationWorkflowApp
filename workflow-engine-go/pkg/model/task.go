@@ -72,6 +72,9 @@ type Task struct {
 	TaskDefinitionCode string          `json:"task_definition_code" db:"task_definition_code"`
 	ActivityCode       string          `json:"activity_code"        db:"activity_code"`
 	StageCode          string          `json:"stage_code"           db:"stage_code"`
+	RequiresApproval   bool            `json:"requires_approval"    db:"requires_approval"`
+	ApprovalGateID     *string         `json:"approval_gate_id"     db:"approval_gate_id"`
+	ApprovalAmount     *float64        `json:"approval_amount"      db:"approval_amount"`
 	Status             TaskStatus      `json:"status"               db:"status"`
 	Priority           TaskPriority    `json:"priority"             db:"priority"`
 	AssignedService    *string         `json:"assigned_service"     db:"assigned_service"`

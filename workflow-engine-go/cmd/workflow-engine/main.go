@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"workflow-engine/internal/database"
+	"workflow-engine/internal/approval"
 	"workflow-engine/internal/engine"
 	"workflow-engine/internal/engine/assignment"
 	"workflow-engine/internal/repository"
@@ -69,6 +70,8 @@ func main() {
 	sqlxDB := sqlx.NewDb(stdDB, "pgx")
 	repo.SetSQLX(sqlxDB)
 	slaSweepJob := sla.NewSLASweepJob(sqlxDB, nil, 5*time.Minute, 5000, slog.Default())
+	approvalEvaluator := approval.NewApprovalPolicyEvaluator(sqlxDB, slog.Default(), nil)
+	approvalExpirySweepJob := approval.NewApprovalExpirySweepJob(sqlxDB, nil, approvalEvaluator, 1*time.Minute, 500, slog.Default())
 
 	// Health Check Server
 	mux := http.NewServeMux()
@@ -116,10 +119,12 @@ func main() {
 	// Start Sweepers
 	go func() {
 		slaTicker := time.NewTicker(5 * time.Minute)
+		approvalTicker := time.NewTicker(1 * time.Minute)
 		capTicker := time.NewTicker(15 * time.Minute)
 		expiryTicker := time.NewTicker(10 * time.Minute)
 		archivalTicker := time.NewTicker(1 * time.Hour)
 		defer slaTicker.Stop()
+		defer approvalTicker.Stop()
 		defer capTicker.Stop()
 		defer expiryTicker.Stop()
 		defer archivalTicker.Stop()
@@ -131,6 +136,10 @@ func main() {
 			case <-slaTicker.C:
 				if err := slaSweepJob.Run(ctx); err != nil {
 					slog.Error("sla sweep failed", "error", err)
+				}
+			case <-approvalTicker.C:
+				if err := approvalExpirySweepJob.Run(ctx); err != nil {
+					slog.Error("approval expiry sweep failed", "error", err)
 				}
 			case <-capTicker.C:
 				if err := workflowEngine.RunCapacitySweep(ctx); err != nil {

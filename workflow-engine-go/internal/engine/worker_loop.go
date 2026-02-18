@@ -160,6 +160,18 @@ func (w *WorkerLoop) processTask(ctx context.Context, task model.Task) {
 		return
 	}
 
+	// Approval-enabled tasks may be moved to AWAITING_EXTERNAL when gate activation
+	// creates approval requests. In that state the worker must not execute handler logic.
+	var liveStatus string
+	if err := w.Repo.Pool.QueryRow(ctx, `
+		SELECT status
+		FROM tasks
+		WHERE id = $1::uuid
+	`, task.ID).Scan(&liveStatus); err == nil && liveStatus == string(model.TaskStatusAwaitingExternal) {
+		slog.Info("task moved to awaiting external; skipping worker execution", "task_id", task.ID, "service", w.Config.ServiceName)
+		return
+	}
+
 	// 2. Start heartbeat goroutine
 	heartbeatDone := make(chan struct{})
 	go func() {

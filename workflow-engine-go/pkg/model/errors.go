@@ -5,6 +5,7 @@ import "errors"
 // Sentinel errors for domain failures. Use errors.Is() to check.
 var (
 	ErrNoEligibleWorker       = errors.New("no eligible worker found")
+	ErrNoEligibleApprover     = errors.New("no eligible approver found")
 	ErrWorkerAtCapacity       = errors.New("worker at maximum capacity")
 	ErrInvalidStateTransition = errors.New("invalid state transition")
 	ErrCaseAlreadySuspended   = errors.New("case is already suspended")

@@ -58,6 +58,20 @@ func (o *CaseOrchestratorService) HandleEvent(ctx context.Context, event model.E
 		return o.onSLAThresholdEvent(ctx, event)
 	case model.EventSLAPaused, model.EventSLAResumed, model.EventSLAReset, model.EventSLAExtended:
 		return o.onSLALifecycleEvent(ctx, event)
+	case model.EventApprovalGateCreated,
+		model.EventApprovalRequested,
+		model.EventApprovalGranted,
+		model.EventApprovalRejected,
+		model.EventApprovalDelegated,
+		model.EventApprovalExpired,
+		model.EventApprovalGateSatisfied,
+		model.EventApprovalGateFailed,
+		model.EventNoEligibleApprover:
+		return o.onApprovalEvent(ctx, event)
+	case model.EventCaseSentToRework,
+		model.EventCaseRejected,
+		model.EventCaseMaxReworkExceeded:
+		return o.onApprovalCaseEvent(ctx, event)
 	default:
 		slog.Warn("unhandled event type", "event_type", event.EventType)
 		return nil
@@ -431,6 +445,108 @@ func (o *CaseOrchestratorService) onSLALifecycleEvent(ctx context.Context, event
 	return tx.Commit(ctx)
 }
 
+func (o *CaseOrchestratorService) onApprovalEvent(ctx context.Context, event model.Event) error {
+	var payload map[string]interface{}
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		return fmt.Errorf("onApprovalEvent: parse payload: %w", err)
+	}
+
+	caseID := ""
+	if event.CaseID != nil {
+		caseID = *event.CaseID
+	}
+	entityID := strFromMap(payload, "gate_id")
+	if entityID == "" {
+		entityID = strFromMap(payload, "request_id")
+	}
+
+	slog.Info("approval event",
+		"event_type", event.EventType,
+		"case_id", caseID,
+		"entity_id", entityID)
+
+	if caseID == "" {
+		return nil
+	}
+
+	tx, err := o.Repo.Pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("onApprovalEvent: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if auditErr := o.Repo.InsertAuditEntry(ctx, tx, model.AuditEntry{
+		CaseID:      caseID,
+		Action:      model.AuditAction(string(event.EventType)),
+		EntityType:  model.AuditEntityCase,
+		EntityID:    &entityID,
+		ActorID:     "approval-service",
+		ActorType:   model.AuditActorSystem,
+		ChangeDelta: event.Payload,
+	}); auditErr != nil {
+		slog.Warn("audit insert failed", "error", auditErr, "event_type", event.EventType)
+	}
+
+	return tx.Commit(ctx)
+}
+
+func (o *CaseOrchestratorService) onApprovalCaseEvent(ctx context.Context, event model.Event) error {
+	var payload map[string]interface{}
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		return fmt.Errorf("onApprovalCaseEvent: parse payload: %w", err)
+	}
+
+	caseID := ""
+	if event.CaseID != nil {
+		caseID = *event.CaseID
+	}
+	if caseID == "" {
+		caseID = strFromMap(payload, "case_id")
+	}
+	if caseID == "" {
+		return nil
+	}
+
+	tx, err := o.Repo.Pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("onApprovalCaseEvent: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Ensure CASE_REJECTED signals actually put the case in terminal REJECTED state.
+	if event.EventType == model.EventCaseRejected || event.EventType == model.EventCaseMaxReworkExceeded {
+		_, err := tx.Exec(ctx, `
+			UPDATE cases
+			SET status = 'REJECTED',
+			    completed_at = COALESCE(completed_at, now()),
+			    updated_at = now(),
+			    row_version = row_version + 1
+			WHERE id = $1::uuid
+		`, caseID)
+		if err != nil {
+			return fmt.Errorf("onApprovalCaseEvent: update case rejected: %w", err)
+		}
+	}
+
+	entityID := strFromMap(payload, "gate_id")
+	if entityID == "" {
+		entityID = caseID
+	}
+	if auditErr := o.Repo.InsertAuditEntry(ctx, tx, model.AuditEntry{
+		CaseID:      caseID,
+		Action:      model.AuditAction(string(event.EventType)),
+		EntityType:  model.AuditEntityCase,
+		EntityID:    &entityID,
+		ActorID:     "approval-service",
+		ActorType:   model.AuditActorSystem,
+		ChangeDelta: event.Payload,
+	}); auditErr != nil {
+		slog.Warn("audit insert failed", "error", auditErr, "event_type", event.EventType)
+	}
+
+	return tx.Commit(ctx)
+}
+
 // ---------------------------------------------------------------------------
 // CreateTasksForStage — bulk-inserts tasks for a new stage from config
 // ---------------------------------------------------------------------------
@@ -447,6 +563,10 @@ func CreateTasksForStage(
 	caseTypeConfig model.CaseTypeConfig,
 ) (int, error) {
 	count := 0
+	caseMetadata, err := loadCaseMetadataForApproval(ctx, tx, caseID)
+	if err != nil {
+		return count, fmt.Errorf("failed to load case metadata for approvals: %w", err)
+	}
 
 	for _, activity := range stageDef.Activities {
 		for _, taskDef := range activity.TaskDefs {
@@ -468,6 +588,14 @@ func CreateTasksForStage(
 				MaxRetries:         3,
 				InputPayload:       inputPayload,
 				IdempotencyKey:     idempotencyKey,
+			}
+			if taskDef.RequiresApproval && taskDef.Approval != nil {
+				task.RequiresApproval = true
+				approvalAmount, amountErr := resolveApprovalAmountForTask(taskDef, caseMetadata)
+				if amountErr != nil {
+					return count, fmt.Errorf("failed to resolve approval amount for task %s: %w", taskDef.Code, amountErr)
+				}
+				task.ApprovalAmount = approvalAmount
 			}
 
 			resolvedSLA, err := sla.ResolveEffectiveSLADefinition(caseTypeConfig, stageCode, activity.Code, taskDef.Code)
@@ -516,6 +644,12 @@ func CreateTasksForStage(
 				`, dueAt, durationMS, resolvedSLA.WarningThresholdPct, resolvedSLA.CriticalThresholdPct, string(resolvedSLA.BreachAction), calendarID, createdTask.ID)
 				if err != nil {
 					return count, fmt.Errorf("failed to persist SLA snapshot for task %s: %w", taskDef.Code, err)
+				}
+			}
+
+			if taskDef.RequiresApproval && taskDef.Approval != nil {
+				if _, err := createApprovalGateForTask(ctx, tx, repo, caseID, createdTask.ID, taskDef, caseTypeConfig, task.ApprovalAmount); err != nil {
+					return count, fmt.Errorf("failed to create approval gate for task %s: %w", taskDef.Code, err)
 				}
 			}
 

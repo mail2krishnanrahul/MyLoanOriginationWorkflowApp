@@ -15,6 +15,7 @@ const (
 	CaseStatusCompleted  = "COMPLETED"
 	CaseStatusCancelled  = "CANCELLED"
 	CaseStatusSuspended  = "SUSPENDED"
+	CaseStatusRejected   = "REJECTED"
 	CaseStatusCloned     = "CLONED"
 )
 
@@ -36,6 +37,8 @@ type CaseInstance struct {
 	Status              string          `json:"status"                db:"status"`
 	Metadata            json.RawMessage `json:"metadata"              db:"metadata"`
 	AssignedTo          *string         `json:"assigned_to"           db:"assigned_to"`
+	ReworkCount         int             `json:"rework_count"          db:"rework_count"`
+	MaxReworkAttempts   int             `json:"max_rework_attempts"   db:"max_rework_attempts"`
 	RowVersion          int             `json:"row_version"           db:"row_version"`
 	CreatedAt           time.Time       `json:"created_at"            db:"created_at"`
 	UpdatedAt           time.Time       `json:"updated_at"            db:"updated_at"`
@@ -60,5 +63,5 @@ func (c *CaseInstance) IsRegression(newOrdinal int) bool {
 // IsTerminal returns true if the case is in a final state that should not
 // accept further transitions.
 func (c *CaseInstance) IsTerminal() bool {
-	return c.Status == CaseStatusCompleted || c.Status == CaseStatusCancelled
+	return c.Status == CaseStatusCompleted || c.Status == CaseStatusCancelled || c.Status == CaseStatusRejected
 }

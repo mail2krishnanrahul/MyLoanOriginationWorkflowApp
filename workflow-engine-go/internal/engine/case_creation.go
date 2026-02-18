@@ -91,6 +91,18 @@ func CreateCase(
 		return CreateCaseResponse{}, fmt.Errorf("failed to insert case: %w", err)
 	}
 
+	if caseType.Config.MaxReworkAttempts > 0 {
+		if _, err := tx.Exec(ctx, `
+			UPDATE cases
+			SET max_rework_attempts = $1,
+			    updated_at = now(),
+			    row_version = row_version + 1
+			WHERE id = $2::uuid
+		`, caseType.Config.MaxReworkAttempts, caseInstance.ID); err != nil {
+			return CreateCaseResponse{}, fmt.Errorf("failed to apply max_rework_attempts: %w", err)
+		}
+	}
+
 	// Initialize immutable case-level SLA snapshot at creation time.
 	if err := applyCaseSLAAtCreation(ctx, tx, repo, caseInstance.ID, caseType.Config); err != nil {
 		return CreateCaseResponse{}, fmt.Errorf("failed to initialize case SLA: %w", err)
@@ -216,6 +228,18 @@ func CreateSubCases(
 
 		if err := repo.InsertCaseInstance(ctx, tx, subCase); err != nil {
 			return fmt.Errorf("failed to create sub-case %s: %w", subCode, err)
+		}
+
+		if subCaseType.Config.MaxReworkAttempts > 0 {
+			if _, err := tx.Exec(ctx, `
+				UPDATE cases
+				SET max_rework_attempts = $1,
+				    updated_at = now(),
+				    row_version = row_version + 1
+				WHERE id = $2::uuid
+			`, subCaseType.Config.MaxReworkAttempts, subCase.ID); err != nil {
+				return fmt.Errorf("failed to apply sub-case max_rework_attempts %s: %w", subCode, err)
+			}
 		}
 
 		if err := applyCaseSLAAtCreation(ctx, tx, repo, subCase.ID, subCaseType.Config); err != nil {

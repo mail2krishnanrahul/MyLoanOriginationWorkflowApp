@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"workflow-engine/internal/repository"
+	"workflow-engine/internal/sla"
 	"workflow-engine/pkg/model"
 )
 
@@ -89,6 +91,11 @@ func CreateCase(
 		return CreateCaseResponse{}, fmt.Errorf("failed to insert case: %w", err)
 	}
 
+	// Initialize immutable case-level SLA snapshot at creation time.
+	if err := applyCaseSLAAtCreation(ctx, tx, repo, caseInstance.ID, caseType.Config); err != nil {
+		return CreateCaseResponse{}, fmt.Errorf("failed to initialize case SLA: %w", err)
+	}
+
 	slog.Info("case created",
 		"case_id", caseInstance.ID,
 		"reference_number", caseInstance.ReferenceNumber,
@@ -112,7 +119,7 @@ func CreateCase(
 
 	// 6. Create tasks for the entry stage
 	tasksCreated, err := CreateTasksForStage(ctx, tx, repo,
-		caseInstance.ID, entryStage.Code, entryStage)
+		caseInstance.ID, entryStage.Code, entryStage, caseType.Config)
 	if err != nil {
 		return CreateCaseResponse{}, fmt.Errorf("failed to create entry tasks: %w", err)
 	}
@@ -211,11 +218,64 @@ func CreateSubCases(
 			return fmt.Errorf("failed to create sub-case %s: %w", subCode, err)
 		}
 
+		if err := applyCaseSLAAtCreation(ctx, tx, repo, subCase.ID, subCaseType.Config); err != nil {
+			return fmt.Errorf("failed to initialize sub-case SLA %s: %w", subCode, err)
+		}
+
 		slog.Info("sub-case created",
 			"sub_case_id", subCase.ID,
 			"reference_number", subCase.ReferenceNumber,
 			"sub_case_type", subCode,
 			"parent_case_id", parentCase.ID)
+	}
+
+	return nil
+}
+
+func applyCaseSLAAtCreation(
+	ctx context.Context,
+	tx repository.DBExecutor,
+	repo *repository.Repository,
+	caseID string,
+	config model.CaseTypeConfig,
+) error {
+	def, err := sla.ResolveEffectiveSLADefinition(config, "", "", "")
+	if err != nil {
+		return fmt.Errorf("applyCaseSLAAtCreation: %w", err)
+	}
+	if def == nil {
+		return nil
+	}
+	if repo.SQLX == nil {
+		return fmt.Errorf("applyCaseSLAAtCreation: sqlx db is not configured")
+	}
+
+	dueAt, durationMS, calendarID, err := sla.ComputeSLADeadline(
+		ctx,
+		repo.SQLX,
+		time.Now().UTC(),
+		config.DefaultCalendarID,
+		*def,
+	)
+	if err != nil {
+		return fmt.Errorf("applyCaseSLAAtCreation: compute deadline: %w", err)
+	}
+
+	_, err = tx.Exec(ctx, `
+		UPDATE cases
+		SET case_due_at = $1,
+		    case_effective_start_time = now(),
+		    case_sla_duration_ms = $2,
+		    case_sla_warning_threshold_pct = $3,
+		    case_sla_critical_threshold_pct = $4,
+		    case_sla_breach_action = $5,
+		    case_sla_calendar_id = $6::uuid,
+		    updated_at = now(),
+		    row_version = row_version + 1
+		WHERE id = $7::uuid
+	`, dueAt, durationMS, def.WarningThresholdPct, def.CriticalThresholdPct, string(def.BreachAction), calendarID, caseID)
+	if err != nil {
+		return fmt.Errorf("applyCaseSLAAtCreation: update case: %w", err)
 	}
 
 	return nil

@@ -37,6 +37,15 @@ const (
 	EventTaskSLABreached         EventType = "TASK_SLA_BREACHED"
 	EventWorkbasketTaskClaimed   EventType = "WORKBASKET_TASK_CLAIMED"
 	EventWorkerCapacityExceeded  EventType = "WORKER_CAPACITY_EXCEEDED"
+
+	// SLA Events (cross-entity and explicit lifecycle)
+	EventSLAWarning  EventType = "SLA_WARNING"
+	EventSLACritical EventType = "SLA_CRITICAL"
+	EventSLABreached EventType = "SLA_BREACHED"
+	EventSLAPaused   EventType = "SLA_PAUSED"
+	EventSLAResumed  EventType = "SLA_RESUMED"
+	EventSLAReset    EventType = "SLA_RESET"
+	EventSLAExtended EventType = "SLA_EXTENDED"
 )
 
 // ---------------------------------------------------------------------------

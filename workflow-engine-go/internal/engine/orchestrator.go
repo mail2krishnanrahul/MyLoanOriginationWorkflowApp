@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"workflow-engine/internal/repository"
+	"workflow-engine/internal/sla"
 	"workflow-engine/pkg/model"
 )
 
@@ -52,6 +54,10 @@ func (o *CaseOrchestratorService) HandleEvent(ctx context.Context, event model.E
 		return o.onActivityCompleted(ctx, event)
 	case model.EventCaseStageChanged:
 		return o.onCaseStageChanged(ctx, event)
+	case model.EventSLAWarning, model.EventSLACritical, model.EventSLABreached:
+		return o.onSLAThresholdEvent(ctx, event)
+	case model.EventSLAPaused, model.EventSLAResumed, model.EventSLAReset, model.EventSLAExtended:
+		return o.onSLALifecycleEvent(ctx, event)
 	default:
 		slog.Warn("unhandled event type", "event_type", event.EventType)
 		return nil
@@ -329,12 +335,98 @@ func (o *CaseOrchestratorService) onCaseStageChanged(ctx context.Context, event 
 	}
 	defer tx.Rollback(ctx)
 
-	count, err := CreateTasksForStage(ctx, tx, o.Repo, caseID, toStage, *stageDef)
+	count, err := CreateTasksForStage(ctx, tx, o.Repo, caseID, toStage, *stageDef, caseType.Config)
 	if err != nil {
 		return fmt.Errorf("failed to create tasks for stage %s: %w", toStage, err)
 	}
 
 	slog.Info("tasks created for stage", "count", count, "stage", toStage, "case_id", caseID)
+
+	return tx.Commit(ctx)
+}
+
+// onSLAThresholdEvent handles SLA_WARNING / SLA_CRITICAL / SLA_BREACHED.
+func (o *CaseOrchestratorService) onSLAThresholdEvent(ctx context.Context, event model.Event) error {
+	var payload map[string]interface{}
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		return fmt.Errorf("onSLAThresholdEvent: parse payload: %w", err)
+	}
+
+	caseID := strFromMap(payload, "case_id")
+	entityType := strFromMap(payload, "entity_type")
+	entityID := strFromMap(payload, "entity_id")
+
+	slog.Info("SLA threshold event",
+		"event_type", event.EventType,
+		"case_id", caseID,
+		"entity_type", entityType,
+		"entity_id", entityID)
+
+	// Threshold events are side-effect driven in the SLA service. The orchestrator
+	// records auditable visibility and leaves domain state untouched here.
+	if caseID == "" {
+		return nil
+	}
+
+	tx, err := o.Repo.Pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("onSLAThresholdEvent: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if auditErr := o.Repo.InsertAuditEntry(ctx, tx, model.AuditEntry{
+		CaseID:      caseID,
+		Action:      model.AuditAction(string(event.EventType)),
+		EntityType:  model.AuditEntityCase,
+		EntityID:    &entityID,
+		ActorID:     "sla-sweeper",
+		ActorType:   model.AuditActorSystem,
+		ChangeDelta: event.Payload,
+	}); auditErr != nil {
+		slog.Warn("audit insert failed", "error", auditErr, "event_type", event.EventType)
+	}
+
+	return tx.Commit(ctx)
+}
+
+// onSLALifecycleEvent handles SLA_PAUSED / SLA_RESUMED / SLA_RESET / SLA_EXTENDED.
+func (o *CaseOrchestratorService) onSLALifecycleEvent(ctx context.Context, event model.Event) error {
+	var payload map[string]interface{}
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		return fmt.Errorf("onSLALifecycleEvent: parse payload: %w", err)
+	}
+
+	caseID := strFromMap(payload, "case_id")
+	entityType := strFromMap(payload, "entity_type")
+	entityID := strFromMap(payload, "entity_id")
+
+	slog.Info("SLA lifecycle event",
+		"event_type", event.EventType,
+		"case_id", caseID,
+		"entity_type", entityType,
+		"entity_id", entityID)
+
+	if caseID == "" {
+		return nil
+	}
+
+	tx, err := o.Repo.Pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("onSLALifecycleEvent: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if auditErr := o.Repo.InsertAuditEntry(ctx, tx, model.AuditEntry{
+		CaseID:      caseID,
+		Action:      model.AuditAction(string(event.EventType)),
+		EntityType:  model.AuditEntityCase,
+		EntityID:    &entityID,
+		ActorID:     "sla-service",
+		ActorType:   model.AuditActorSystem,
+		ChangeDelta: event.Payload,
+	}); auditErr != nil {
+		slog.Warn("audit insert failed", "error", auditErr, "event_type", event.EventType)
+	}
 
 	return tx.Commit(ctx)
 }
@@ -352,6 +444,7 @@ func CreateTasksForStage(
 	repo *repository.Repository,
 	caseID, stageCode string,
 	stageDef model.StageDefinitionV2,
+	caseTypeConfig model.CaseTypeConfig,
 ) (int, error) {
 	count := 0
 
@@ -377,9 +470,55 @@ func CreateTasksForStage(
 				IdempotencyKey:     idempotencyKey,
 			}
 
-			if _, err := repo.CreateTask(ctx, tx, task); err != nil {
+			resolvedSLA, err := sla.ResolveEffectiveSLADefinition(caseTypeConfig, stageCode, activity.Code, taskDef.Code)
+			if err != nil {
+				return count, fmt.Errorf("failed to resolve SLA for task %s: %w", taskDef.Code, err)
+			}
+
+			var dueAt time.Time
+			var durationMS int64
+			var calendarID string
+			if resolvedSLA != nil {
+				if repo.SQLX == nil {
+					return count, fmt.Errorf("sqlx db is not configured for SLA task %s", taskDef.Code)
+				}
+				dueAt, durationMS, calendarID, err = sla.ComputeSLADeadline(
+					ctx,
+					repo.SQLX,
+					time.Now().UTC(),
+					caseTypeConfig.DefaultCalendarID,
+					*resolvedSLA,
+				)
+				if err != nil {
+					return count, fmt.Errorf("failed to compute SLA deadline for task %s: %w", taskDef.Code, err)
+				}
+				task.DueAt = &dueAt
+			}
+
+			createdTask, err := repo.CreateTask(ctx, tx, task)
+			if err != nil {
 				return count, fmt.Errorf("failed to create task %s: %w", taskDef.Code, err)
 			}
+
+			if resolvedSLA != nil {
+				_, err = tx.Exec(ctx, `
+					UPDATE tasks
+					SET task_due_at = $1,
+					    effective_start_time = COALESCE(effective_start_time, created_at),
+					    sla_duration_ms = $2,
+					    sla_warning_threshold_pct = $3,
+					    sla_critical_threshold_pct = $4,
+					    sla_breach_action = $5,
+					    sla_calendar_id = $6::uuid,
+					    updated_at = now(),
+					    version = version + 1
+					WHERE id = $7::uuid
+				`, dueAt, durationMS, resolvedSLA.WarningThresholdPct, resolvedSLA.CriticalThresholdPct, string(resolvedSLA.BreachAction), calendarID, createdTask.ID)
+				if err != nil {
+					return count, fmt.Errorf("failed to persist SLA snapshot for task %s: %w", taskDef.Code, err)
+				}
+			}
+
 			count++
 		}
 	}

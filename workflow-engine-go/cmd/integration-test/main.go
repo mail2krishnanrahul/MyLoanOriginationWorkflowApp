@@ -8,6 +8,7 @@ import (
 
 	"workflow-engine/internal/database"
 	"workflow-engine/internal/engine"
+	"workflow-engine/internal/engine/assignment"
 	"workflow-engine/internal/repository"
 	"workflow-engine/pkg/model"
 )
@@ -136,7 +137,7 @@ func main() {
 	slog.Info("inserted TASK_COMPLETED event")
 
 	// 3. Start Engine in Background
-	eng := engine.NewEngine(repo, 2)
+	eng := engine.NewEngine(repo, assignment.NewManager(repo), 2)
 	ctxCancel, cancel := context.WithCancel(ctx)
 	defer cancel()
 

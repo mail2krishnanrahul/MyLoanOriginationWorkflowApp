@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"workflow-engine/internal/repository"
+	"workflow-engine/internal/sla"
 	"workflow-engine/pkg/model"
 
 	"github.com/jackc/pgx/v5"
@@ -136,6 +138,10 @@ func (e *Engine) SuspendCase(ctx context.Context, caseID string, reason string, 
 			return fmt.Errorf("SuspendCase: failed to pause in-flight tasks: %w", err)
 		}
 
+		if err := appendCaseSLAPauseLogs(ctx, e.Repo, tx, caseID, "CASE_SUSPENDED"); err != nil {
+			return fmt.Errorf("SuspendCase: failed to write SLA pause logs: %w", err)
+		}
+
 		// 5. Publish Event
 		payload := map[string]interface{}{
 			"case_id":   caseID,
@@ -229,6 +235,10 @@ func (e *Engine) ResumeCase(ctx context.Context, caseID string) error {
 			return fmt.Errorf("ResumeCase: iterate queued tasks: %w", err)
 		}
 
+		if err := appendCaseSLAResumeLogs(ctx, e.Repo, tx, caseID, "CASE_RESUMED"); err != nil {
+			return fmt.Errorf("ResumeCase: failed to write SLA resume logs: %w", err)
+		}
+
 		event := model.Event{
 			CaseID:    &caseID,
 			EventType: model.EventCaseResumed,
@@ -238,6 +248,315 @@ func (e *Engine) ResumeCase(ctx context.Context, caseID string) error {
 
 		return e.Repo.PublishEvent(ctx, tx, event)
 	})
+}
+
+func appendCaseSLAPauseLogs(ctx context.Context, repoIface Repository, tx pgx.Tx, caseID string, reason string) error {
+	repoImpl, ok := repoIface.(*repository.Repository)
+	if !ok {
+		return nil
+	}
+
+	now := time.Now().UTC()
+	var caseStart time.Time
+	var caseCalendarID *string
+	err := tx.QueryRow(ctx, `
+		SELECT COALESCE(case_effective_start_time, created_at), case_sla_calendar_id::text
+		FROM cases
+		WHERE id = $1::uuid
+	`, caseID).Scan(&caseStart, &caseCalendarID)
+	if err != nil {
+		return fmt.Errorf("appendCaseSLAPauseLogs: load case SLA state: %w", err)
+	}
+
+	caseElapsedMS := int64(0)
+	if repoImpl.SQLX != nil && caseCalendarID != nil && *caseCalendarID != "" {
+		elapsed, err := sla.BusinessHoursElapsed(ctx, repoImpl.SQLX, caseStart, now, *caseCalendarID)
+		if err != nil {
+			return fmt.Errorf("appendCaseSLAPauseLogs: compute case elapsed business time: %w", err)
+		}
+		caseElapsedMS = elapsed.Milliseconds()
+	}
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO sla_pause_log (
+			entity_type, entity_id, paused_at, resumed_at, pause_reason, elapsed_before_pause_ms, action
+		)
+		VALUES ('CASE', $1::uuid, $2, NULL, $3, $4, 'PAUSE')
+	`, caseID, now, reason, caseElapsedMS)
+	if err != nil {
+		return fmt.Errorf("appendCaseSLAPauseLogs: insert case pause log: %w", err)
+	}
+
+	casePayload, _ := json.Marshal(map[string]interface{}{
+		"entity_type": "CASE",
+		"entity_id":   caseID,
+		"case_id":     caseID,
+		"reason":      reason,
+	})
+	if err := repoImpl.PublishEvent(ctx, tx, model.Event{
+		CaseID:    &caseID,
+		EventType: model.EventSLAPaused,
+		Payload:   casePayload,
+		Status:    model.EventStatusPending,
+	}); err != nil {
+		return fmt.Errorf("appendCaseSLAPauseLogs: publish case SLA_PAUSED: %w", err)
+	}
+
+	rows, err := tx.Query(ctx, `
+		SELECT id::text, COALESCE(effective_start_time, created_at), sla_calendar_id::text
+		FROM tasks
+		WHERE case_id = $1::uuid
+		  AND status IN ('PENDING', 'ASSIGNED', 'IN_PROGRESS', 'AWAITING_EXTERNAL')
+	`, caseID)
+	if err != nil {
+		return fmt.Errorf("appendCaseSLAPauseLogs: query task SLA state: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var taskID string
+		var taskStart time.Time
+		var taskCalendarID *string
+		if err := rows.Scan(&taskID, &taskStart, &taskCalendarID); err != nil {
+			return fmt.Errorf("appendCaseSLAPauseLogs: scan task row: %w", err)
+		}
+
+		taskElapsedMS := int64(0)
+		if repoImpl.SQLX != nil && taskCalendarID != nil && *taskCalendarID != "" {
+			elapsed, err := sla.BusinessHoursElapsed(ctx, repoImpl.SQLX, taskStart, now, *taskCalendarID)
+			if err != nil {
+				return fmt.Errorf("appendCaseSLAPauseLogs: compute task elapsed business time: %w", err)
+			}
+			taskElapsedMS = elapsed.Milliseconds()
+		}
+
+		_, err = tx.Exec(ctx, `
+			INSERT INTO sla_pause_log (
+				entity_type, entity_id, paused_at, resumed_at, pause_reason, elapsed_before_pause_ms, action
+			)
+			VALUES ('TASK', $1::uuid, $2, NULL, $3, $4, 'PAUSE')
+		`, taskID, now, reason, taskElapsedMS)
+		if err != nil {
+			return fmt.Errorf("appendCaseSLAPauseLogs: insert task pause log %s: %w", taskID, err)
+		}
+
+		taskPayload, _ := json.Marshal(map[string]interface{}{
+			"entity_type": "TASK",
+			"entity_id":   taskID,
+			"case_id":     caseID,
+			"task_id":     taskID,
+			"reason":      reason,
+		})
+		if err := repoImpl.PublishEvent(ctx, tx, model.Event{
+			CaseID:    &caseID,
+			TaskID:    &taskID,
+			EventType: model.EventSLAPaused,
+			Payload:   taskPayload,
+			Status:    model.EventStatusPending,
+		}); err != nil {
+			return fmt.Errorf("appendCaseSLAPauseLogs: publish task SLA_PAUSED %s: %w", taskID, err)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("appendCaseSLAPauseLogs: iterate task rows: %w", err)
+	}
+
+	return nil
+}
+
+func appendCaseSLAResumeLogs(ctx context.Context, repoIface Repository, tx pgx.Tx, caseID string, reason string) error {
+	repoImpl, ok := repoIface.(*repository.Repository)
+	if !ok {
+		return nil
+	}
+
+	now := time.Now().UTC()
+	var casePausedAt time.Time
+	var caseElapsedMS int64
+	var caseDurationMS *int64
+	var caseCalendarID *string
+	err := tx.QueryRow(ctx, `
+		SELECT
+			COALESCE((
+				SELECT paused_at
+				FROM sla_pause_log
+				WHERE entity_type = 'CASE'
+				  AND entity_id = $1::uuid
+				  AND action = 'PAUSE'
+				ORDER BY created_at DESC
+				LIMIT 1
+			), now()),
+			COALESCE((
+				SELECT elapsed_before_pause_ms
+				FROM sla_pause_log
+				WHERE entity_type = 'CASE'
+				  AND entity_id = $1::uuid
+				  AND action = 'PAUSE'
+				ORDER BY created_at DESC
+				LIMIT 1
+			), 0),
+			case_sla_duration_ms,
+			case_sla_calendar_id::text
+		FROM cases
+		WHERE id = $1::uuid
+	`, caseID).Scan(&casePausedAt, &caseElapsedMS, &caseDurationMS, &caseCalendarID)
+	if err != nil {
+		return fmt.Errorf("appendCaseSLAResumeLogs: load case resume state: %w", err)
+	}
+
+	if caseDurationMS != nil && *caseDurationMS > 0 {
+		remaining := time.Duration(*caseDurationMS-caseElapsedMS) * time.Millisecond
+		if remaining < 0 {
+			remaining = 0
+		}
+		var newCaseDueAt time.Time
+		if repoImpl.SQLX != nil && caseCalendarID != nil && *caseCalendarID != "" {
+			newCaseDueAt, err = sla.AddBusinessHours(ctx, repoImpl.SQLX, now, remaining, *caseCalendarID)
+			if err != nil {
+				return fmt.Errorf("appendCaseSLAResumeLogs: recompute case due_at: %w", err)
+			}
+		} else {
+			newCaseDueAt = now.Add(remaining)
+		}
+		_, err = tx.Exec(ctx, `
+			UPDATE cases
+			SET case_effective_start_time = $1,
+			    case_due_at = $2,
+			    case_sla_warning_issued_at = NULL,
+			    case_sla_critical_issued_at = NULL,
+			    updated_at = now(),
+			    row_version = row_version + 1
+			WHERE id = $3::uuid
+		`, now, newCaseDueAt, caseID)
+		if err != nil {
+			return fmt.Errorf("appendCaseSLAResumeLogs: update case due_at: %w", err)
+		}
+	}
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO sla_pause_log (
+			entity_type, entity_id, paused_at, resumed_at, pause_reason, elapsed_before_pause_ms, action
+		)
+		VALUES ('CASE', $1::uuid, $2, $3, $4, $5, 'RESUME')
+	`, caseID, casePausedAt, now, reason, caseElapsedMS)
+	if err != nil {
+		return fmt.Errorf("appendCaseSLAResumeLogs: insert case resume log: %w", err)
+	}
+
+	casePayload, _ := json.Marshal(map[string]interface{}{
+		"entity_type": "CASE",
+		"entity_id":   caseID,
+		"case_id":     caseID,
+		"reason":      reason,
+	})
+	if err := repoImpl.PublishEvent(ctx, tx, model.Event{
+		CaseID:    &caseID,
+		EventType: model.EventSLAResumed,
+		Payload:   casePayload,
+		Status:    model.EventStatusPending,
+	}); err != nil {
+		return fmt.Errorf("appendCaseSLAResumeLogs: publish case SLA_RESUMED: %w", err)
+	}
+
+	rows, err := tx.Query(ctx, `
+		SELECT id::text, sla_duration_ms, sla_calendar_id::text
+		FROM tasks
+		WHERE case_id = $1::uuid
+		  AND status IN ('PENDING', 'ASSIGNED', 'IN_PROGRESS', 'AWAITING_EXTERNAL')
+	`, caseID)
+	if err != nil {
+		return fmt.Errorf("appendCaseSLAResumeLogs: query task resume state: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var taskID string
+		var taskDurationMS *int64
+		var taskCalendarID *string
+		if err := rows.Scan(&taskID, &taskDurationMS, &taskCalendarID); err != nil {
+			return fmt.Errorf("appendCaseSLAResumeLogs: scan task row: %w", err)
+		}
+
+		var pausedAt time.Time
+		var elapsedMS int64
+		err := tx.QueryRow(ctx, `
+			SELECT paused_at, elapsed_before_pause_ms
+			FROM sla_pause_log
+			WHERE entity_type = 'TASK'
+			  AND entity_id = $1::uuid
+			  AND action = 'PAUSE'
+			ORDER BY created_at DESC
+			LIMIT 1
+		`, taskID).Scan(&pausedAt, &elapsedMS)
+		if err != nil {
+			pausedAt = now
+			elapsedMS = 0
+		}
+
+		if taskDurationMS != nil && *taskDurationMS > 0 {
+			remaining := time.Duration(*taskDurationMS-elapsedMS) * time.Millisecond
+			if remaining < 0 {
+				remaining = 0
+			}
+
+			var newTaskDueAt time.Time
+			if repoImpl.SQLX != nil && taskCalendarID != nil && *taskCalendarID != "" {
+				newTaskDueAt, err = sla.AddBusinessHours(ctx, repoImpl.SQLX, now, remaining, *taskCalendarID)
+				if err != nil {
+					return fmt.Errorf("appendCaseSLAResumeLogs: recompute task due_at %s: %w", taskID, err)
+				}
+			} else {
+				newTaskDueAt = now.Add(remaining)
+			}
+
+			_, err = tx.Exec(ctx, `
+				UPDATE tasks
+				SET effective_start_time = $1,
+				    task_due_at = $2,
+				    due_at = $2,
+				    sla_warning_issued_at = NULL,
+				    sla_critical_issued_at = NULL,
+				    updated_at = now(),
+				    version = version + 1
+				WHERE id = $3::uuid
+			`, now, newTaskDueAt, taskID)
+			if err != nil {
+				return fmt.Errorf("appendCaseSLAResumeLogs: update task due_at %s: %w", taskID, err)
+			}
+		}
+
+		_, err = tx.Exec(ctx, `
+			INSERT INTO sla_pause_log (
+				entity_type, entity_id, paused_at, resumed_at, pause_reason, elapsed_before_pause_ms, action
+			)
+			VALUES ('TASK', $1::uuid, $2, $3, $4, $5, 'RESUME')
+		`, taskID, pausedAt, now, reason, elapsedMS)
+		if err != nil {
+			return fmt.Errorf("appendCaseSLAResumeLogs: insert task resume log %s: %w", taskID, err)
+		}
+
+		taskPayload, _ := json.Marshal(map[string]interface{}{
+			"entity_type": "TASK",
+			"entity_id":   taskID,
+			"case_id":     caseID,
+			"task_id":     taskID,
+			"reason":      reason,
+		})
+		if err := repoImpl.PublishEvent(ctx, tx, model.Event{
+			CaseID:    &caseID,
+			TaskID:    &taskID,
+			EventType: model.EventSLAResumed,
+			Payload:   taskPayload,
+			Status:    model.EventStatusPending,
+		}); err != nil {
+			return fmt.Errorf("appendCaseSLAResumeLogs: publish task SLA_RESUMED %s: %w", taskID, err)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("appendCaseSLAResumeLogs: iterate task rows: %w", err)
+	}
+
+	return nil
 }
 
 // WithdrawCase cancels a case by applicant request and cancels all open tasks.

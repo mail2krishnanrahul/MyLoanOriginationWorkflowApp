@@ -7,6 +7,7 @@ import (
 
 	"workflow-engine/internal/database"
 	"workflow-engine/internal/engine"
+	"workflow-engine/internal/engine/assignment"
 	"workflow-engine/internal/parser"
 	"workflow-engine/internal/repository"
 )
@@ -150,7 +151,7 @@ func main() {
 	}
 
 	repo := repository.NewRepository(db.Pool)
-	eng := engine.NewEngine(repo, 1)
+	eng := engine.NewEngine(repo, assignment.NewManager(repo), 1)
 
 	// Create a Dummy Case
 	var caseID string

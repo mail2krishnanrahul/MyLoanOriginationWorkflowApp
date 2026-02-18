@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -15,6 +16,10 @@ import (
 	"workflow-engine/internal/engine"
 	"workflow-engine/internal/engine/assignment"
 	"workflow-engine/internal/repository"
+	"workflow-engine/internal/sla"
+
+	"github.com/jmoiron/sqlx"
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 func main() {
@@ -53,6 +58,17 @@ func main() {
 	repo := repository.NewRepository(db.Pool)
 	assignmentManager := assignment.NewManager(repo)
 	workflowEngine := engine.NewEngine(repo, assignmentManager, workerCount)
+
+	// SQLX connection for SLA calendar-aware computations and sweep job.
+	stdDB, err := sql.Open("pgx", connString)
+	if err != nil {
+		slog.Error("failed to open sql driver connection", "error", err)
+		os.Exit(1)
+	}
+	defer stdDB.Close()
+	sqlxDB := sqlx.NewDb(stdDB, "pgx")
+	repo.SetSQLX(sqlxDB)
+	slaSweepJob := sla.NewSLASweepJob(sqlxDB, nil, 5*time.Minute, 5000, slog.Default())
 
 	// Health Check Server
 	mux := http.NewServeMux()
@@ -99,7 +115,7 @@ func main() {
 
 	// Start Sweepers
 	go func() {
-		slaTicker := time.NewTicker(2 * time.Minute)
+		slaTicker := time.NewTicker(5 * time.Minute)
 		capTicker := time.NewTicker(15 * time.Minute)
 		expiryTicker := time.NewTicker(10 * time.Minute)
 		archivalTicker := time.NewTicker(1 * time.Hour)
@@ -113,7 +129,7 @@ func main() {
 			case <-ctx.Done():
 				return
 			case <-slaTicker.C:
-				if err := workflowEngine.RunSLAUrgencySweep(ctx); err != nil {
+				if err := slaSweepJob.Run(ctx); err != nil {
 					slog.Error("sla sweep failed", "error", err)
 				}
 			case <-capTicker.C:

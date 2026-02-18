@@ -49,8 +49,10 @@ type CaseType struct {
 
 // CaseTypeConfig is the top-level JSON structure stored in the config column.
 type CaseTypeConfig struct {
-	Stages       []StageDefinitionV2 `json:"stages"`
-	SubCaseTypes []string            `json:"sub_case_types,omitempty"` // e.g. ["CREDIT_CHECK", "VALUATION"]
+	Stages            []StageDefinitionV2 `json:"stages"`
+	SubCaseTypes      []string            `json:"sub_case_types,omitempty"` // e.g. ["CREDIT_CHECK", "VALUATION"]
+	DefaultCalendarID string              `json:"default_calendar_id,omitempty"`
+	SLA               *SLAHierarchyConfig `json:"sla,omitempty"`
 }
 
 // Scan implements the sql.Scanner interface so pgx can read JSONB into this struct.
@@ -81,6 +83,7 @@ type StageDefinitionV2 struct {
 	Description   string           `json:"description,omitempty"`
 	SequenceOrder int              `json:"sequence_order"`
 	Activities    []ActivityConfig `json:"activities"`
+	SLA           *SLADefinition   `json:"sla,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -95,6 +98,7 @@ type ActivityConfig struct {
 	Description   string             `json:"description,omitempty"`
 	SequenceOrder int                `json:"sequence_order"`
 	TaskDefs      []TaskDefinitionV2 `json:"task_definitions"`
+	SLA           *SLADefinition     `json:"sla,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -110,4 +114,5 @@ type TaskDefinitionV2 struct {
 	Required      bool            `json:"required"`
 	SequenceOrder int             `json:"sequence_order"`
 	Config        json.RawMessage `json:"config,omitempty"` // UI hints, endpoints, timeouts, etc.
+	SLA           *SLADefinition  `json:"sla,omitempty"`
 }

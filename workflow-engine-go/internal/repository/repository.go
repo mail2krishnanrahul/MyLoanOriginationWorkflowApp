@@ -7,6 +7,7 @@ import (
 
 	"workflow-engine/pkg/model"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -21,10 +22,16 @@ type DBExecutor interface {
 
 type Repository struct {
 	Pool *pgxpool.Pool
+	SQLX *sqlx.DB
 }
 
 func NewRepository(pool *pgxpool.Pool) *Repository {
 	return &Repository{Pool: pool}
+}
+
+// SetSQLX wires an sqlx handle for calendar-aware SLA computations.
+func (r *Repository) SetSQLX(db *sqlx.DB) {
+	r.SQLX = db
 }
 
 // PollPendingEvents fetches pending events from the outbox and atomically

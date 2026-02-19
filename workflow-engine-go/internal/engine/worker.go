@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,6 +19,7 @@ type Engine struct {
 	Repo              Repository
 	AssignmentManager *assignment.Manager
 	WorkerCount       int
+	EventObserver     EventObserver
 }
 
 func NewEngine(repo Repository, assignmentManager *assignment.Manager, workers int) *Engine {
@@ -26,6 +28,16 @@ func NewEngine(repo Repository, assignmentManager *assignment.Manager, workers i
 		AssignmentManager: assignmentManager,
 		WorkerCount:       workers,
 	}
+}
+
+// EventObserver reacts to events after primary processing completes.
+type EventObserver interface {
+	HandleEvent(ctx context.Context, event model.Event) error
+}
+
+// SetEventObserver wires an optional event observer (for example notifications).
+func (e *Engine) SetEventObserver(observer EventObserver) {
+	e.EventObserver = observer
 }
 
 // Start initiates the worker pool
@@ -165,6 +177,13 @@ func (e *Engine) processEvent(ctx context.Context, event model.OutboxEvent) erro
 			return processingErr // Triggers rollback
 		}
 
+		if e.EventObserver != nil && !isNotificationInternalOutboxEvent(event.EventType) {
+			domainEvent := toDomainEvent(event)
+			if err := e.EventObserver.HandleEvent(ctx, domainEvent); err != nil {
+				return fmt.Errorf("event observer failed: %w", err)
+			}
+		}
+
 		// 2. Mark as PROCESSED (inside same transaction)
 		return e.Repo.UpdateEventStatus(ctx, tx, event.ID, model.OutboxStatusProcessed, nil)
 	})
@@ -183,6 +202,59 @@ func (e *Engine) processEvent(ctx context.Context, event model.OutboxEvent) erro
 	}
 
 	return nil
+}
+
+func isNotificationInternalOutboxEvent(eventType string) bool {
+	normalized := strings.ToUpper(strings.TrimSpace(eventType))
+	return normalized == string(model.EventCircuitBreakerOpened) || strings.HasPrefix(normalized, "NOTIFICATION_")
+}
+
+func toDomainEvent(outbox model.OutboxEvent) model.Event {
+	payloadMap := outbox.PayloadMap()
+	caseID := extractStringPtr(outbox.CaseID)
+	if caseID == "" {
+		caseID = extractStringValue(payloadMap, "case_id")
+	}
+	taskID := extractStringPtr(outbox.TaskID)
+	if taskID == "" {
+		taskID = extractStringValue(payloadMap, "task_id")
+	}
+
+	event := model.Event{
+		ID:        outbox.ID,
+		EventType: model.EventType(outbox.EventType),
+		Payload:   outbox.Payload,
+		Status:    model.EventStatusPending,
+		CreatedAt: outbox.CreatedAt,
+	}
+	if caseID != "" {
+		event.CaseID = &caseID
+	}
+	if taskID != "" {
+		event.TaskID = &taskID
+	}
+	return event
+}
+
+func extractStringValue(payload map[string]interface{}, key string) string {
+	if payload == nil {
+		return ""
+	}
+	raw, ok := payload[key]
+	if !ok {
+		return ""
+	}
+	if raw == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(raw))
+}
+
+func extractStringPtr(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(*value)
 }
 
 func (e *Engine) handleTaskCompleted(ctx context.Context, tx repository.DBExecutor, event model.OutboxEvent) error {

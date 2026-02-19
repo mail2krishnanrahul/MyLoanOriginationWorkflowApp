@@ -49,7 +49,7 @@ func (r *Repository) PollPendingEvents(ctx context.Context, limit int) ([]model.
 	defer tx.Rollback(ctx)
 
 	rows, err := tx.Query(ctx, `
-		SELECT id, event_type, payload, status, created_at, attempts
+		SELECT id, case_id::text AS case_id, task_id::text AS task_id, event_type, payload, status, created_at, attempts
 		FROM events_outbox
 		WHERE status = $1
 		ORDER BY created_at ASC
@@ -66,8 +66,12 @@ func (r *Repository) PollPendingEvents(ctx context.Context, limit int) ([]model.
 	var ids []string
 	for rows.Next() {
 		var event model.OutboxEvent
+		var caseID *string
+		var taskID *string
 		if err := rows.Scan(
 			&event.ID,
+			&caseID,
+			&taskID,
 			&event.EventType,
 			&event.Payload,
 			&event.Status,
@@ -76,6 +80,8 @@ func (r *Repository) PollPendingEvents(ctx context.Context, limit int) ([]model.
 		); err != nil {
 			return nil, fmt.Errorf("PollPendingEvents: scan: %w", err)
 		}
+		event.CaseID = caseID
+		event.TaskID = taskID
 		events = append(events, event)
 		ids = append(ids, event.ID)
 	}

@@ -60,6 +60,13 @@ const (
 	EventCaseRejected         EventType = "CASE_REJECTED"
 	EventCaseMaxReworkExceeded EventType = "CASE_MAX_REWORK_EXCEEDED"
 	EventNoEligibleApprover   EventType = "NO_ELIGIBLE_APPROVER"
+
+	// Notification Internal Events
+	EventNotificationQueued       EventType = "NOTIFICATION_QUEUED"
+	EventNotificationSent         EventType = "NOTIFICATION_SENT"
+	EventNotificationFailed       EventType = "NOTIFICATION_FAILED"
+	EventNotificationSuppressed   EventType = "NOTIFICATION_SUPPRESSED"
+	EventCircuitBreakerOpened     EventType = "CIRCUIT_BREAKER_OPENED"
 )
 
 // ---------------------------------------------------------------------------

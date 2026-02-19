@@ -64,7 +64,7 @@ CODEBASE CONVENTIONS — MATCH THESE EXACTLY
 - Status/type fields: typed Go string enums with const blocks
 - Migrations: sequential numbered files using golang-migrate
   conventions — UP and DOWN in separate files
-  (e.g. 009_add_approval_gates.up.sql / .down.sql)
+  (e.g. 010_add_notifications.up.sql / .down.sql)
 - Event publishing: always via PublishEvent(ctx, tx, event)
   inside the same transaction as the state change (outbox)
 - Worker polling: SELECT FOR UPDATE SKIP LOCKED
@@ -82,221 +82,257 @@ ALL MY CURRENT GO STRUCTS AND CURRENT KEY FUNCTIONS HERE IN THE CURRENT PROJECT 
 
 ═══════════════════════════════════════════════════════════════
 CAPABILITY UNDER REVIEW
-APPROVAL & DECISION GATES
+CORRESPONDENCE & NOTIFICATIONS
 ═══════════════════════════════════════════════════════════════
 Sub-capabilities to implement — ALL of them, in this order:
 
-  1. APPROVAL TASK DEFINITION
-     An approval is a special type of Task with additional
-     metadata. In the case_type config, a task_definition can
-     be marked as requires_approval: true. This creates an
-     approval_gate when the task is instantiated. An approval
-     gate has:
-       - approval_policy: SINGLE_APPROVER | ALL_MUST_APPROVE |
-         ANY_CAN_APPROVE | MAJORITY | CONSENSUS (> 66%)
-       - required_approver_count: int (used by MAJORITY, ANY)
-       - approver_selection: EXPLICIT_LIST | ROLE_BASED |
-         REPORTING_CHAIN | DYNAMIC_RULE
-       - approvers: list of user IDs or roles (if EXPLICIT_LIST)
-       - authority_limit: decimal (if approval involves $$ amounts,
-         e.g. only users with authority >= this amount can approve)
-       - approval_timeout_hours: decimal (approval expires if not
-         acted upon within this time — uses business calendar)
-       - on_timeout_action: AUTO_APPROVE | AUTO_REJECT | ESCALATE
-       - rejection_behavior: SEND_TO_REWORK | TERMINAL_FAIL
-       - rework_target_stage_code: nullable (which stage to regress
-         to if rejected and rejection_behavior = SEND_TO_REWORK)
-     When a task with requires_approval: true reaches IN_PROGRESS,
-     the system creates an approval_requests table entry for each
-     required approver. Task cannot complete until approval policy
-     is satisfied.
-
-  2. APPROVAL CHAINS & TIERED APPROVAL
-     Approval can be structured in tiers/levels. A case_type can
-     define an approval_chain in config:
-       approval_chain:
-         - tier: 1
-           approver_role: "CREDIT_ANALYST"
-           authority_limit: 100000
-           can_skip_if: "amount < 50000"
-         - tier: 2
-           approver_role: "SENIOR_MANAGER"
-           authority_limit: 500000
-           required_if: "amount >= 100000"
-         - tier: 3
-           approver_role: "DIRECTOR"
-           authority_limit: null  # unlimited
-           required_if: "amount >= 500000"
-     The system evaluates the chain in order. Each tier spawns
-     an approval_requests row. A tier blocks until its approval
-     policy is satisfied, then the next tier starts. If a tier's
-     can_skip_if evaluates true, that tier is skipped entirely.
-     required_if determines whether a tier must run or is optional.
-     Expressions are evaluated against case.metadata JSONB using
-     a simple expression evaluator (support: ==, !=, <, >, <=, >=,
-     && for AND, || for OR, field access via dot notation).
-     Store the approval chain state in an approval_chain_state
-     table: current_tier, tier_status (PENDING | APPROVED |
-     REJECTED | SKIPPED), tier_started_at, tier_completed_at.
-
-  3. DELEGATED AUTHORITY LIMITS
-     Approvers have authority limits stored in a user_authority
-     table: user_id, authority_type (e.g. LOAN_APPROVAL,
-     CREDIT_ADJUSTMENT), max_amount, granted_by, granted_at,
-     expires_at (nullable). When selecting approvers for a task,
-     the system must filter by:
-       - approver has the required role/skill
-       - approver.max_amount >= task.approval_amount (if amount-based)
-       - approver.expires_at IS NULL OR expires_at > NOW()
-     If no eligible approvers are found, publish
-     NO_ELIGIBLE_APPROVER event and escalate to a fallback
-     supervisor role defined in the case_type config.
-     Authority limits are version-controlled in an
-     authority_limit_history table (append-only log of grants
-     and revocations).
-
-  4. APPROVAL REQUEST LIFECYCLE
-     Each approver receives an approval_request row:
-       - approval_gate_id (FK to approval_gates table)
-       - approver_id (user ID)
-       - tier (nullable, used in approval chains)
-       - status: PENDING | APPROVED | REJECTED | EXPIRED | DELEGATED
-       - decision: nullable text (approver's reason/justification)
-       - evidence_refs: JSONB array of document IDs or URLs
-       - decided_at, decided_by (who actually made the decision,
-         may differ from approver_id if delegated)
-       - expires_at (computed from approval_timeout_hours)
-       - delegated_to_id (nullable, if approver delegates)
+  1. NOTIFICATION TEMPLATE MANAGEMENT
+     Templates define reusable notification content with
+     variable interpolation. Store in a notification_templates
+     table:
+       - template_code (unique, e.g. LOAN_APPROVED, DOC_REQUIRED)
+       - case_type_code (nullable — global templates if null)
+       - channel: EMAIL | SMS | PUSH | IN_APP | WEBHOOK
+       - subject_template (nullable, used by EMAIL)
+       - body_template (text with {{variable}} placeholders)
+       - language_code (e.g. 'en', 'es', 'zh' — multi-language)
+       - status: DRAFT | ACTIVE | DEPRECATED
+       - version (integer, allows template evolution)
+       - metadata JSONB (channel-specific config, e.g. email
+         from_address, sms_sender_id, webhook_url)
      
-     Approver actions:
-       APPROVE:
-         - Set status = APPROVED, decision, evidence_refs, decided_at
-         - Publish APPROVAL_GRANTED event
-         - Check if approval_policy is now satisfied
-         - If satisfied, complete the approval gate and allow
-           the parent task to proceed
-       
-       REJECT:
-         - Set status = REJECTED, decision, evidence_refs, decided_at
-         - Publish APPROVAL_REJECTED event
-         - Execute rejection_behavior:
-           - SEND_TO_REWORK: RecordStageTransition to
-             rework_target_stage_code (regression), create new
-             tasks for that stage, publish CASE_SENT_TO_REWORK
-           - TERMINAL_FAIL: set case status = REJECTED (terminal),
-             cancel all open tasks, publish CASE_REJECTED
-       
-       DELEGATE:
-         - Set status = DELEGATED, delegated_to_id, delegated_at
-         - Create a new approval_request for the delegate with
-           the same gate, preserving the delegation chain
-         - Publish APPROVAL_DELEGATED event
-       
-       (TIMEOUT):
-         - Background sweep job detects expires_at < NOW()
-         - Set status = EXPIRED
-         - Execute on_timeout_action from the gate definition
-         - Publish APPROVAL_EXPIRED event
+     Variables are interpolated from case.metadata, task data,
+     or passed-in context at render time. Provide a template
+     rendering engine that uses text/template or a similar library.
+     Example template:
+       Subject: "Your {{case_type}} Application ({{reference_number}})"
+       Body: "Dear {{borrower_name}}, your application is now
+              {{stage_name}}. Next steps: {{next_steps_description}}."
+     
+     Templates support conditional blocks and loops using Go
+     template syntax. Invalid template syntax is detected at
+     template creation time, not render time.
 
-  5. APPROVAL POLICY EVALUATION ENGINE
-     Produce a reusable function that evaluates whether an
-     approval_gate is satisfied:
-       
-       func EvaluateApprovalPolicy(
-           ctx context.Context,
-           db  *sqlx.DB,
-           gateID string,
-       ) (satisfied bool, err error)
+  2. NOTIFICATION TRIGGER CONFIGURATION
+     Define when notifications are sent using a
+     notification_triggers table:
+       - trigger_code (unique)
+       - case_type_code (nullable for global triggers)
+       - event_type (e.g. CASE_CREATED, TASK_ASSIGNED,
+         APPROVAL_REJECTED, SLA_WARNING, STAGE_CHANGED)
+       - filter_expression (nullable — only fire if condition true,
+         e.g. "stage_code == 'UNDERWRITING' && amount > 500000")
+       - template_code FK to notification_templates
+       - recipient_type: CASE_OWNER | TASK_ASSIGNEE | APPROVER |
+         SUPERVISOR | BORROWER | FIXED_ADDRESS | DYNAMIC_RULE
+       - recipient_value (nullable — used by FIXED_ADDRESS or
+         as fallback; for DYNAMIC_RULE, stores the rule expression)
+       - send_after_minutes (delay, e.g. 0 for immediate, 60 for 1hr)
+       - dedupe_window_minutes (suppress duplicate notifications
+         within this window to the same recipient)
+       - priority: LOW | NORMAL | HIGH | URGENT
+       - is_enabled boolean
      
-     Logic by policy:
-       SINGLE_APPROVER:
-         satisfied = COUNT(status=APPROVED) >= 1
-       
-       ALL_MUST_APPROVE:
-         satisfied = COUNT(status=APPROVED) == COUNT(total approvers)
-         fail fast: if COUNT(status=REJECTED) > 0 → not satisfied
-       
-       ANY_CAN_APPROVE:
-         satisfied = COUNT(status=APPROVED) >= 1
-         fail fast: if COUNT(status=REJECTED) == COUNT(total) → not satisfied
-       
-       MAJORITY:
-         satisfied = COUNT(status=APPROVED) > COUNT(total) / 2
-         fail fast: if COUNT(status=REJECTED) > COUNT(total) / 2 → not satisfied
-       
-       CONSENSUS (> 66%):
-         satisfied = COUNT(status=APPROVED) / COUNT(total) > 0.66
-         fail fast: if COUNT(status=REJECTED) makes it impossible → not satisfied
-     
-     This function is called after every approval/rejection
-     decision. If satisfied, the gate closes and the parent task
-     can proceed. If fail-fast condition is met, trigger rejection
-     behavior immediately without waiting for remaining approvers.
+     When an event is published, the system checks all active
+     triggers matching that event_type and case_type. If the
+     filter_expression evaluates true (using the same expression
+     evaluator from Approval Gates), a notification_queue entry
+     is created.
 
-  6. APPROVAL EXPIRY SWEEP
-     A background job monitors all PENDING approval_requests and
-     detects expires_at < NOW(). For each expired request:
-       - Set status = EXPIRED
-       - Execute on_timeout_action from the parent gate:
-         - AUTO_APPROVE: treat as if approver approved
-           (status = APPROVED, decided_by = 'SYSTEM_AUTO_APPROVE')
-         - AUTO_REJECT: treat as rejection, trigger rejection_behavior
-         - ESCALATE: reassign to the approver's supervisor or
-           fallback role, reset expires_at with same timeout duration
-       - Publish APPROVAL_EXPIRED event with timeout_action taken
+  3. NOTIFICATION QUEUE & DISPATCH
+     All outbound notifications go through a notification_queue
+     table (another outbox pattern):
+       - notification_id (PK, UUID)
+       - trigger_code (which trigger created this notification)
+       - case_id FK (nullable)
+       - task_id FK (nullable)
+       - template_code
+       - channel
+       - recipient (email address, phone number, user_id, etc.)
+       - subject (rendered from template)
+       - body (rendered from template)
+       - priority
+       - scheduled_at (NOW() + send_after_minutes from trigger)
+       - status: PENDING | SENT | FAILED | SUPPRESSED | CANCELLED
+       - attempts (retry counter)
+       - last_attempt_at
+       - sent_at (nullable)
+       - error_detail JSONB
+       - created_at, updated_at
      
-     Sweep interval: recommend 1 minute (approvals are time-sensitive).
-     Expiry detection must be idempotent — use expires_at timestamp
-     and status to ensure each expiry is processed exactly once.
+     A notification dispatcher service polls this queue using
+     SELECT FOR UPDATE SKIP LOCKED where:
+       status = PENDING
+       AND scheduled_at <= NOW()
+       AND attempts < max_attempts
+     
+     For each claimed notification, the dispatcher:
+       - Renders the template with case/task data (if not pre-rendered)
+       - Calls the appropriate channel adapter (email, SMS, push, webhook)
+       - Records sent_at and status = SENT on success
+       - Records error_detail and increments attempts on failure
+       - Applies exponential backoff: next attempt =
+         NOW() + (2^attempts * base_retry_interval)
+     
+     The dispatcher must be idempotent — use notification_id as
+     the idempotency key when calling external services.
 
-  7. APPROVAL HISTORY & AUDIT
-     Every decision, delegation, and expiry is recorded immutably
-     in an approval_audit_log table:
-       - approval_request_id
-       - event_type: REQUESTED | APPROVED | REJECTED | DELEGATED |
-         EXPIRED | AUTO_APPROVED | AUTO_REJECTED | ESCALATED
-       - actor_id (who performed the action, 'SYSTEM' for auto)
-       - decision_text (approver's reason)
-       - evidence_refs JSONB
-       - previous_state, new_state (for audit trail continuity)
-       - created_at
+  4. MULTI-CHANNEL ADAPTERS
+     Each notification channel has an adapter interface:
+       
+       type NotificationChannel interface {
+           Send(ctx context.Context, notif Notification) error
+       }
      
-     This log is append-only. Provide a query function:
-       func GetApprovalHistory(
+     Implement adapters for:
+       
+       EMAIL:
+         Use SMTP or an email service API (e.g. SendGrid, AWS SES).
+         Support HTML body with fallback plain text.
+         Track open/click via webhook callbacks (optional, store in
+         notification_delivery_events table).
+       
+       SMS:
+         Use an SMS gateway API (e.g. Twilio, AWS SNS).
+         Enforce message length limits (160 chars for GSM-7).
+         Truncate long messages or split into multiple parts.
+       
+       PUSH:
+         Use FCM (Firebase Cloud Messaging) or APNs for mobile push.
+         Requires device token stored in user profile or case metadata.
+       
+       IN_APP:
+         Insert into a user_notifications table that the frontend
+         polls or subscribes to via WebSocket.
+         Mark as unread initially, provide mark-as-read endpoint.
+       
+       WEBHOOK:
+         HTTP POST to a URL defined in template.metadata.webhook_url.
+         Send case/task data as JSON payload.
+         Record response status and body in notification_queue.
+       
+     Each adapter must:
+       - Return a typed error on failure (transient vs permanent)
+       - Support timeout (ctx with deadline)
+       - Log the full request/response at debug level
+       - Never panic — catch and return errors
+
+  5. DEDUPLICATION & SUPPRESSION
+     Prevent notification spam using two mechanisms:
+       
+       DEDUPLICATION (same recipient, same trigger, short window):
+         Before inserting into notification_queue, check:
+           SELECT id FROM notification_queue
+           WHERE recipient = $1
+             AND trigger_code = $2
+             AND case_id = $3
+             AND created_at > NOW() - INTERVAL '{{dedupe_window_minutes}} minutes'
+             AND status != 'CANCELLED'
+         If a row exists, do not insert a new notification. Mark
+         the would-be notification as SUPPRESSED in a
+         notification_suppression_log table for audit purposes:
+           suppressed_at, trigger_code, recipient, reason ('DUPLICATE')
+       
+       USER PREFERENCES (opt-out, do-not-disturb):
+         Store user notification preferences in user_preferences table:
+           - user_id
+           - channel (nullable — null = all channels)
+           - opt_out boolean (user has unsubscribed)
+           - quiet_hours_start, quiet_hours_end (e.g. 22:00 - 07:00)
+           - quiet_hours_timezone
+           - enabled_notification_types JSONB array (explicit allow-list)
+         
+         Before sending, check:
+           - If opt_out = true for this user + channel → suppress
+           - If current time is within quiet_hours → delay until
+             quiet_hours_end (update scheduled_at)
+           - If notification_type not in enabled_notification_types
+             → suppress
+         
+         Record suppressions in notification_suppression_log with
+         reason ('OPT_OUT', 'QUIET_HOURS', 'TYPE_DISABLED').
+
+  6. DELIVERY TRACKING & ACKNOWLEDGEMENT
+     Track the full lifecycle of each notification in a
+     notification_delivery_events table:
+       - notification_id FK
+       - event_type: QUEUED | CLAIMED | RENDERED | DISPATCHED |
+         DELIVERED | OPENED | CLICKED | BOUNCED | FAILED
+       - event_timestamp
+       - channel_response JSONB (e.g. email service message ID,
+         SMS delivery receipt, webhook HTTP status)
+       - user_agent (for OPENED/CLICKED events from tracking pixels)
+     
+     For customer-facing notifications (to BORROWER), support
+     acknowledgement tracking:
+       - Add acknowledged_at timestamp to notification_queue
+       - Provide an endpoint POST /notifications/{id}/acknowledge
+         that sets acknowledged_at = NOW()
+       - Use this for compliance ("customer was notified and acknowledged")
+     
+     Provide query functions:
+       func GetNotificationHistory(
            ctx context.Context,
            db  *sqlx.DB,
            caseID string,
-       ) ([]ApprovalAuditEntry, error)
-     that returns the full approval history for a case, ordered
-     chronologically, with approver names resolved (JOIN users).
-     This is used by compliance officers and auditors.
-
-  8. REWORK LOOP IMPLEMENTATION
-     When an approval is rejected with rejection_behavior =
-     SEND_TO_REWORK:
-       - RecordStageTransition to rework_target_stage_code
-         (mark is_regression = true)
-       - Cancel all tasks in the current stage that are not yet
-         completed (set status = CANCELLED, reason = 'APPROVAL_REJECTED')
-       - Create new task instances for the rework_target_stage
-         (use the same logic as stage transition task creation)
-       - Publish CASE_SENT_TO_REWORK event with:
-           - case_id, from_stage, to_stage (rework target)
-           - rejection_reason, rejected_by, rejected_at
-       - Preserve the rejected approval_gate and all its requests
-         in the database (do not delete) — mark them with
-         gate_status = REJECTED_REWORK_INITIATED for audit trail
+       ) ([]NotificationRecord, error)
        
-       On re-entry to the stage that had the approval:
-       - Create a NEW approval_gate (do not reuse the old one)
-       - The new gate may have different approvers if approver
-         selection is DYNAMIC_RULE (re-evaluate eligibility)
+       func GetDeliveryRate(
+           ctx context.Context,
+           db  *sqlx.DB,
+           channel string,
+           startDate, endDate time.Time,
+       ) (DeliveryStats, error)
+       // returns: total sent, delivered, failed, bounce rate
+
+  7. RETRY & CIRCUIT BREAKER
+     Handle transient failures in external notification services:
+       
+       RETRY LOGIC:
+         - Max attempts: 5
+         - Backoff: exponential with jitter (2^attempt * base + rand)
+         - Base retry interval: 30 seconds
+         - Permanent failure (4xx error from API): mark as FAILED
+           immediately, do not retry
+         - Transient failure (5xx, timeout, network error): retry
+       
+       CIRCUIT BREAKER (per channel):
+         Track failure rate in a circuit_breaker_state table:
+           - channel
+           - state: CLOSED | OPEN | HALF_OPEN
+           - failure_count, success_count
+           - last_failure_at, opened_at, half_open_at
+           - threshold_failures (e.g. 10 failures in 1 minute → open)
+         
+         When state = OPEN:
+           - All send attempts immediately return ErrCircuitOpen
+           - Mark notifications as status = FAILED with
+             error_detail: "circuit breaker open"
+           - After a cooldown period (e.g. 5 minutes), transition
+             to HALF_OPEN
+         
+         When state = HALF_OPEN:
+           - Allow a small number of test requests through
+           - If success → transition to CLOSED
+           - If failure → transition back to OPEN
+         
+         This prevents cascading failures and API rate limit exhaustion
+         when an external service degrades.
+
+  8. CORRESPONDENCE AUDIT LOG
+     Every notification sent, suppressed, or failed is recorded
+     immutably in the notification_delivery_events table (see #6).
+     This serves as the audit trail.
      
-     Rework loops can occur multiple times. Track the rework count
-     on the case: rework_count integer, increment on each rework.
-     If rework_count exceeds a configurable max_rework_attempts
-     (defined in case_type config), automatically set case status
-     to REJECTED (terminal) and publish CASE_MAX_REWORK_EXCEEDED.
+     Additionally, provide a correspondence_summary view that
+     aggregates:
+       - Total notifications sent per case (by channel)
+       - Unacknowledged borrower notifications (compliance risk)
+       - Failed notification count and reasons
+       - Average delivery time (queued_at to sent_at)
+     
+     This view is materialized and refreshed periodically for
+     dashboards and compliance reports.
 
 ═══════════════════════════════════════════════════════════════
 REQUIRED DELIVERABLES — PRODUCE ALL IN THIS ORDER
@@ -314,90 +350,104 @@ from the pasted implementation above.
 
 For each sub-capability requiring schema changes, produce:
 
-  -- FILE: 009_approval_gates.up.sql
+  -- FILE: 010_notifications.up.sql
   [DDL — CREATE TABLE, ALTER TABLE, CREATE INDEX]
   [Include detailed column comments explaining purpose]
 
-  -- FILE: 009_approval_gates.down.sql
+  -- FILE: 010_notifications.down.sql
   [Full rollback DDL]
 
 New tables to define:
-  - approval_gates
-    (id, task_id FK, approval_policy, required_approver_count,
-     approver_selection, approvers JSONB, authority_limit,
-     approval_timeout_hours, on_timeout_action, rejection_behavior,
-     rework_target_stage_code, gate_status, created_at, closed_at)
+  - notification_templates
+    (id, template_code UNIQUE, case_type_code, channel, subject_template,
+     body_template, language_code, status, version, metadata JSONB,
+     created_at, updated_at)
   
-  - approval_requests
-    (id, approval_gate_id FK, approver_id, tier, status, decision,
-     evidence_refs JSONB, decided_at, decided_by, expires_at,
-     delegated_to_id, created_at, updated_at)
+  - notification_triggers
+    (id, trigger_code UNIQUE, case_type_code, event_type,
+     filter_expression, template_code FK, recipient_type,
+     recipient_value, send_after_minutes, dedupe_window_minutes,
+     priority, is_enabled, created_at, updated_at)
   
-  - approval_chain_state
-    (id, case_id FK, approval_chain_definition JSONB,
-     current_tier, tier_status, tier_started_at, tier_completed_at,
-     chain_status, created_at, updated_at)
+  - notification_queue
+    (id UUID PK, trigger_code, case_id FK, task_id FK, template_code,
+     channel, recipient, subject, body, priority, scheduled_at,
+     status, attempts, last_attempt_at, sent_at, error_detail JSONB,
+     acknowledged_at, created_at, updated_at)
   
-  - user_authority
-    (id, user_id, authority_type, max_amount, granted_by,
-     granted_at, expires_at, revoked_at, revoked_by)
+  - notification_delivery_events
+    (id, notification_id FK, event_type, event_timestamp,
+     channel_response JSONB, user_agent)
   
-  - authority_limit_history
-    (id, user_id, authority_type, max_amount, change_type
-     (GRANTED | REVOKED | MODIFIED), changed_by, changed_at,
-     reason)
+  - notification_suppression_log
+    (id, notification_id, trigger_code, recipient, case_id,
+     suppressed_at, reason, created_at)
   
-  - approval_audit_log
-    (id, approval_request_id FK, event_type, actor_id,
-     decision_text, evidence_refs JSONB, previous_state,
-     new_state, created_at)
+  - user_preferences
+    (id, user_id UNIQUE, channel, opt_out, quiet_hours_start,
+     quiet_hours_end, quiet_hours_timezone,
+     enabled_notification_types JSONB, created_at, updated_at)
+  
+  - circuit_breaker_state
+    (channel PRIMARY KEY, state, failure_count, success_count,
+     last_failure_at, opened_at, half_open_at, threshold_failures,
+     cooldown_seconds, updated_at)
 
-Columns to add to existing tables:
-  - cases: rework_count (integer, default 0),
-    max_rework_attempts (integer, from case_type config)
-  - tasks: requires_approval (boolean, denormalized from
-    task_definition), approval_gate_id (nullable FK)
+Indexes to create:
+  - notification_queue: (status, scheduled_at, priority DESC)
+    for dispatcher polling
+  - notification_queue: (recipient, trigger_code, case_id, created_at)
+    for deduplication check
+  - notification_delivery_events: (notification_id, event_type)
+  - notification_suppression_log: (case_id, suppressed_at)
 
 Rules:
-  - Every index on WHERE/ORDER BY columns for tables > 1M rows
-  - Foreign keys have indexes on referencing columns
+  - Every timestamp is timestamptz in UTC
   - Text enums have CHECK constraints
-  - All timestamps are timestamptz in UTC
-  - Append-only tables (audit_log, history) have no updates
+  - Templates with invalid syntax are rejected at insert time
+    (add a trigger or check constraint that validates template)
+  - notification_queue.id is UUID for distributed idempotency
 
 After the DDL, produce the corresponding Go structs for
 every new table with db and json tags. Use typed enums.
 
-## 3. EXPRESSION EVALUATOR
+## 3. TEMPLATE RENDERING ENGINE
 
-Before implementing approval chains, define the expression
-evaluator for can_skip_if and required_if conditions:
+Define the template engine interface and implementation:
 ```go
-  // ExpressionEvaluator evaluates simple boolean expressions
-  // against a JSONB context (case.metadata).
-  type ExpressionEvaluator struct{}
+  // TemplateRenderer renders notification templates with variable
+  // interpolation using Go's text/template engine.
+  type TemplateRenderer struct {
+      funcMap template.FuncMap
+  }
 
-  // Evaluate parses and evaluates an expression.
-  // Supported: ==, !=, <, >, <=, >=, &&, ||, field access via dot
-  // Example: "amount >= 100000 && risk_rating == 'HIGH'"
-  func (e *ExpressionEvaluator) Evaluate(
-      ctx        context.Context,
-      expression string,
-      context    map[string]interface{}, // from case.metadata
-  ) (bool, error)
+  // Render parses and executes a template with the given context.
+  func (r *TemplateRenderer) Render(
+      ctx          context.Context,
+      templateText string,
+      context      map[string]interface{},
+  ) (string, error)
+
+  // ValidateTemplate checks if a template is syntactically valid
+  // without executing it. Used at template creation time.
+  func (r *TemplateRenderer) ValidateTemplate(
+      templateText string,
+  ) error
 ```
 
-Produce a full implementation. Use a simple recursive descent
-parser or the Expr library (github.com/expr-lang/expr) if
-available. Handle type coercion (string to number, etc.).
-Return typed errors for invalid expressions.
+Produce full implementations with:
+  - Custom template functions: formatDate, formatCurrency,
+    toUpper, truncate
+  - Safe HTML escaping for email body templates
+  - Error handling for missing variables (return error, do not panic)
 
-Include unit tests with table-driven cases covering:
-  - Numeric comparisons
-  - String equality
-  - Boolean AND / OR
-  - Nested field access (e.g. "borrower.credit_score > 700")
-  - Invalid syntax (should return error, not panic)
+Include unit tests with table-driven cases:
+  - Simple variable substitution
+  - Conditional blocks ({{if .approved}}Approved{{else}}Denied{{end}})
+  - Loops ({{range .documents}}{{.name}}{{end}})
+  - Custom functions ({{formatCurrency .amount}})
+  - Invalid syntax (should return validation error)
+  - Missing variable (should return render error)
 
 ## 4. GO IMPLEMENTATION
 
@@ -407,7 +457,7 @@ For each sub-capability, produce:
 
   **New types / enums**
 ```go
-  // Approval-related enums, config structs, request/response types
+  // Notification-related enums, config structs, request/response types
 ```
 
   **Core function(s)**
@@ -416,141 +466,225 @@ For each sub-capability, produce:
 ```
 
   **Event published**
-  Define the event_type constant and payload struct:
-    APPROVAL_GATE_CREATED, APPROVAL_REQUESTED,
-    APPROVAL_GRANTED, APPROVAL_REJECTED, APPROVAL_DELEGATED,
-    APPROVAL_EXPIRED, APPROVAL_GATE_SATISFIED,
-    APPROVAL_GATE_FAILED, CASE_SENT_TO_REWORK,
-    CASE_REJECTED, CASE_MAX_REWORK_EXCEEDED,
-    NO_ELIGIBLE_APPROVER
+  Notifications are triggered by existing events (CASE_CREATED,
+  TASK_ASSIGNED, etc.), not new event types. However, define
+  internal events for the notification system:
+    NOTIFICATION_QUEUED, NOTIFICATION_SENT, NOTIFICATION_FAILED,
+    NOTIFICATION_SUPPRESSED, CIRCUIT_BREAKER_OPENED
 
   **Integration point**
   Show where this hooks into:
-    - CreateTask: if task_definition.requires_approval, create gate
-    - Task status transition to IN_PROGRESS: activate approval gate
-    - HandleEvent: case branches for APPROVAL_* events
-    - RecordStageTransition: handle rework regression
+    - HandleEvent: after processing any event, check triggers
+      and queue notifications
+    - Dispatcher service: separate background service that polls
+      notification_queue
 
-## 5. APPROVAL POLICY EVALUATION ENGINE
+## 5. NOTIFICATION CHANNEL ADAPTERS
 
-Produce the complete implementation:
+Define the interface:
 ```go
-  type ApprovalPolicyEvaluator struct {
+  type NotificationChannel interface {
+      // Name returns the channel identifier (EMAIL, SMS, etc.)
+      Name() string
+
+      // Send dispatches the notification via this channel.
+      // Returns error on failure (transient or permanent).
+      Send(ctx context.Context, notif Notification) error
+
+      // IsTransientError determines if an error is retryable.
+      IsTransientError(err error) bool
+  }
+```
+
+Produce complete implementations for at least three channels:
+
+  ### EmailChannel (using SMTP or mock API)
+```go
+  type EmailChannel struct {
+      smtpHost     string
+      smtpPort     int
+      fromAddress  string
+      username     string
+      password     string
+      logger       *slog.Logger
+  }
+
+  func (c *EmailChannel) Send(ctx context.Context, notif Notification) error {
+      // Full SMTP send implementation with TLS
+      // Parse HTML body, generate plain text fallback
+      // Set Message-ID header for tracking
+      // Return typed error
+  }
+```
+
+  ### SMSChannel (mock or Twilio)
+```go
+  type SMSChannel struct {
+      accountSID  string
+      authToken   string
+      fromNumber  string
+      apiClient   *http.Client
+      logger      *slog.Logger
+  }
+
+  func (c *SMSChannel) Send(ctx context.Context, notif Notification) error {
+      // POST to SMS gateway API
+      // Truncate body to 160 chars
+      // Parse API response for delivery receipt
+      // Return typed error
+  }
+```
+
+  ### InAppChannel
+```go
+  type InAppChannel struct {
       db     *sqlx.DB
       logger *slog.Logger
   }
 
-  // EvaluateApprovalPolicy checks if the gate's approval policy
-  // is satisfied based on current approval_requests state.
-  func (e *ApprovalPolicyEvaluator) EvaluateApprovalPolicy(
-      ctx    context.Context,
-      tx     *sqlx.Tx,
-      gateID string,
-  ) (satisfied bool, err error) {
-      // Full implementation:
-      // 1. Load gate with approval_policy
-      // 2. Load all approval_requests for this gate
-      // 3. Count APPROVED, REJECTED, PENDING by policy
-      // 4. Check fail-fast conditions (early rejection)
-      // 5. Return satisfied = true/false
-      // 6. If satisfied or failed, update gate_status and close gate
-  }
-
-  // EvaluateApprovalChain checks if the current tier in a chain
-  // is complete and advances to the next tier if ready.
-  func (e *ApprovalPolicyEvaluator) EvaluateApprovalChain(
-      ctx     context.Context,
-      tx      *sqlx.Tx,
-      chainID string,
-  ) error {
-      // Full implementation:
-      // 1. Load chain state, get current_tier
-      // 2. Evaluate expressions (can_skip_if, required_if) for tier
-      // 3. If tier satisfied, advance to next tier or complete chain
-      // 4. Publish tier completion event
+  func (c *InAppChannel) Send(ctx context.Context, notif Notification) error {
+      // INSERT into user_notifications table
+      // Set is_read = false
+      // This is always transactional, no external API
   }
 ```
 
-Include unit tests for each policy type with edge cases:
-  - ALL_MUST_APPROVE with one rejection (should fail fast)
-  - MAJORITY with exactly 50/50 split (not satisfied)
-  - CONSENSUS with 67% approved (satisfied)
-  - ANY_CAN_APPROVE with all rejected (fail fast)
+Each adapter includes:
+  - Full error handling (distinguish transient vs permanent)
+  - Timeout enforcement via ctx
+  - Structured logging of request/response
+  - Unit tests with mocked HTTP client (for SMS/Email)
 
-## 6. APPROVAL EXPIRY SWEEP JOB
+## 6. NOTIFICATION DISPATCHER SERVICE
 
-Produce the complete background job:
+Produce the complete background service:
 ```go
-  type ApprovalExpirySweepJob struct {
-      db              *sqlx.DB
-      eventPublisher  EventPublisher
-      evaluator       *ApprovalPolicyEvaluator
-      sweepInterval   time.Duration
-      batchSize       int
-      logger          *slog.Logger
+  type NotificationDispatcher struct {
+      db               *sqlx.DB
+      templateRenderer *TemplateRenderer
+      channels         map[string]NotificationChannel
+      circuitBreaker   *CircuitBreaker
+      pollInterval     time.Duration
+      batchSize        int
+      maxRetries       int
+      logger           *slog.Logger
   }
 
-  func (j *ApprovalExpirySweepJob) Run(ctx context.Context) error {
+  func (d *NotificationDispatcher) Run(ctx context.Context) error {
       // Full implementation:
-      // 1. SELECT approval_requests WHERE status=PENDING AND expires_at < NOW()
-      // 2. For each expired request:
-      //    - Set status = EXPIRED
-      //    - Load gate, get on_timeout_action
-      //    - Execute action (AUTO_APPROVE, AUTO_REJECT, ESCALATE)
-      //    - Log to approval_audit_log
-      //    - Publish APPROVAL_EXPIRED event
-      //    - Call EvaluateApprovalPolicy to check if gate satisfied
-      // 3. Handle errors gracefully (log, continue batch)
+      // 1. Poll notification_queue (SELECT FOR UPDATE SKIP LOCKED)
+      // 2. For each claimed notification:
+      //    - Check circuit breaker state for channel
+      //    - If circuit open, mark FAILED immediately
+      //    - Render template if body not pre-rendered
+      //    - Call appropriate channel.Send()
+      //    - On success: status = SENT, sent_at = NOW()
+      //    - On failure: increment attempts, compute next retry,
+      //      update error_detail
+      //    - Record delivery event
+      // 3. Update circuit breaker state based on results
+      // 4. Handle errors gracefully (log, continue batch)
   }
 
-  func (j *ApprovalExpirySweepJob) Start(ctx context.Context) {
+  func (d *NotificationDispatcher) Start(ctx context.Context) {
       // Runs in a loop with ticker, graceful shutdown on ctx.Done()
   }
 ```
 
-Recommended sweep interval: 1 minute (approvals are time-sensitive).
-Show arithmetic: at 100k cases/day with 2 approvals/case on average
-= 200k approval requests/day = 139 approvals/minute. Batch size 500
-ensures each sweep processes a manageable set even if many expire
-simultaneously.
+Recommended poll interval: 10 seconds (lower latency than tasks).
+Show arithmetic: at 100k cases/day with 3 notifications/case =
+300k notifications/day = 208 notifications/minute = 2080 between
+10-second polls. Batch size 500 is reasonable.
 
-## 7. APPROVER SELECTION FUNCTION
+## 7. CIRCUIT BREAKER IMPLEMENTATION
 
-Produce a function that selects eligible approvers based on
-approver_selection strategy:
+Produce a full circuit breaker:
 ```go
-  func SelectApprovers(
-      ctx             context.Context,
-      db              *sqlx.DB,
-      gate            ApprovalGate,
-      caseData        Case,
-  ) ([]string, error) // returns list of user IDs
+  type CircuitBreaker struct {
+      db                *sqlx.DB
+      thresholdFailures int
+      cooldownDuration  time.Duration
+      halfOpenAttempts  int
+      logger            *slog.Logger
+  }
 
-  // Strategies:
-  //   EXPLICIT_LIST: return gate.approvers (already specified)
-  //   ROLE_BASED: query users WHERE role IN gate.approver_roles
-  //               AND authority_limit >= gate.authority_limit
-  //   REPORTING_CHAIN: walk up the org chart from case.assigned_to
-  //                    until finding someone with authority_limit
-  //   DYNAMIC_RULE: evaluate a rule expression from gate config
-  //                 (e.g. "if amount > 500k then DIRECTOR else MANAGER")
+  // CheckState returns the current state for a channel and
+  // decides whether to allow a send attempt.
+  func (cb *CircuitBreaker) CheckState(
+      ctx     context.Context,
+      channel string,
+  ) (allow bool, err error)
+
+  // RecordSuccess updates the circuit breaker on successful send.
+  func (cb *CircuitBreaker) RecordSuccess(
+      ctx     context.Context,
+      tx      *sqlx.Tx,
+      channel string,
+  ) error
+
+  // RecordFailure updates the circuit breaker on failed send.
+  func (cb *CircuitBreaker) RecordFailure(
+      ctx     context.Context,
+      tx      *sqlx.Tx,
+      channel string,
+  ) error
 ```
 
-Include authority limit filtering for amount-based approvals.
-If no eligible approvers found, return ErrNoEligibleApprover
-(typed sentinel error).
+State transitions:
+  CLOSED → OPEN: when failure_count >= threshold within 1 minute
+  OPEN → HALF_OPEN: after cooldown_duration elapsed
+  HALF_OPEN → CLOSED: after half_open_attempts consecutive successes
+  HALF_OPEN → OPEN: on any failure during half-open
 
-## 8. TEST CASES
+Include unit tests covering all state transitions with time mocking.
+
+## 8. DEDUPLICATION & SUPPRESSION LOGIC
+
+Produce two functions:
+```go
+  // CheckDuplicateNotification queries for recent identical
+  // notifications within the dedupe window.
+  func CheckDuplicateNotification(
+      ctx               context.Context,
+      db                *sqlx.DB,
+      recipient         string,
+      triggerCode       string,
+      caseID            string,
+      dedupeWindowMins  int,
+  ) (isDuplicate bool, err error)
+
+  // CheckUserPreferences evaluates opt-out, quiet hours, and
+  // enabled notification types for a recipient.
+  func CheckUserPreferences(
+      ctx        context.Context,
+      db         *sqlx.DB,
+      recipient  string,
+      channel    string,
+      notifType  string,
+  ) (suppress bool, reason string, err error)
+```
+
+Both are called before inserting into notification_queue.
+If suppression occurs, log to notification_suppression_log.
+
+Include unit tests:
+  - Duplicate within window (suppress)
+  - Duplicate outside window (allow)
+  - User opt-out (suppress)
+  - Quiet hours (delay scheduled_at)
+  - Notification type not enabled (suppress)
+
+## 9. TEST CASES
 
 For each sub-capability, three table-driven tests:
   - Happy path
-  - Edge case (non-obvious — e.g. delegate an already-delegated
-    approval, reject with rework when already at max_rework_attempts,
-    expire an approval with AUTO_REJECT that triggers terminal fail,
-    approval chain skips tier 2 based on can_skip_if, MAJORITY
-    policy with even number of approvers)
-  - Failure mode (DB error, invalid expression syntax, no eligible
-    approvers, gate evaluation during concurrent approvals)
+  - Edge case (render template with missing variable, send
+    notification during quiet hours, duplicate notification
+    exactly at dedupe window boundary, circuit breaker opens
+    during batch dispatch, retry with exponential backoff,
+    acknowledgement of already-acknowledged notification)
+  - Failure mode (template syntax error, SMTP connection timeout,
+    SMS API 4xx error, DB constraint violation on queue insert)
 ```go
   func Test[SubCapabilityName](t *testing.T) {
       tests := []struct {
@@ -570,83 +704,83 @@ For each sub-capability, three table-driven tests:
   }
 ```
 
-Special test for concurrent approval decisions:
+Special test for dispatcher end-to-end:
 ```go
-  func TestConcurrentApprovalDecisions(t *testing.T) {
-      // Simulate 5 approvers making decisions concurrently
-      // for a gate with ALL_MUST_APPROVE policy.
-      // Verify gate_status is updated exactly once and
-      // all approvers see consistent state via optimistic lock.
+  func TestNotificationDispatcherEndToEnd(t *testing.T) {
+      // Insert 10 PENDING notifications in queue
+      // Mock channel.Send() to succeed for 8, fail for 2
+      // Run dispatcher.Run() once
+      // Verify: 8 SENT, 2 status unchanged with attempts++
+      // Verify delivery events created
+      // Verify circuit breaker state updated
   }
 ```
 
-## 9. APPROVAL STATE TRANSITION GUARD
+## 10. NOTIFICATION LIFECYCLE GUARD
 
-Produce a validation function that enforces approval lifecycle:
+Produce a validation function:
 ```go
-  func ValidateApprovalTransition(
+  func ValidateNotificationTransition(
       ctx       context.Context,
-      current   ApprovalRequestStatus,
-      requested ApprovalRequestStatus,
-      actor     Actor,
+      current   NotificationStatus,
+      requested NotificationStatus,
   ) error
 ```
 
-Valid transitions to encode:
-  PENDING → APPROVED       (approver only, with decision + evidence)
-  PENDING → REJECTED       (approver only, with decision + evidence)
-  PENDING → DELEGATED      (approver only, delegated_to_id required)
-  PENDING → EXPIRED        (system only via sweep job)
-  DELEGATED → APPROVED     (delegate only, not original approver)
-  DELEGATED → REJECTED     (delegate only)
-  EXPIRED → APPROVED       (system only if AUTO_APPROVE)
-  EXPIRED → REJECTED       (system only if AUTO_REJECT)
-  EXPIRED → PENDING        (system only if ESCALATE, new expires_at)
+Valid transitions:
+  PENDING → SENT       (dispatcher on successful send)
+  PENDING → FAILED     (dispatcher after max retries)
+  PENDING → SUPPRESSED (before dispatch, due to deduplication/preferences)
+  PENDING → CANCELLED  (user cancels case, all notifications cancelled)
+  FAILED → PENDING     (manual retry by operator)
 
 Reject:
-  - APPROVED → anything    (terminal state)
-  - REJECTED → anything    (terminal state)
-  - PENDING → APPROVED without decision text (evidence required)
-  - DELEGATED → action by original approver (only delegate can act)
-  - Any transition by non-authorized actor
+  SENT → anything      (terminal state)
+  SUPPRESSED → anything (terminal state, logged only)
+  CANCELLED → anything (terminal state)
+  Any backward transition
 
-## 10. INTEGRATION CHECKLIST
+## 11. INTEGRATION CHECKLIST
 
   - [ ] Migrations applied and verified (run up + down + up)
-  - [ ] user_authority table seeded with test authority limits
-  - [ ] ExpressionEvaluator unit tests pass with 100% coverage
-  - [ ] CreateTask updated to create approval_gate if requires_approval
-  - [ ] Task IN_PROGRESS hook activates approval gate (spawns requests)
-  - [ ] HandleEvent updated with all APPROVAL_* event case branches
-  - [ ] ApprovalExpirySweepJob registered in main.go with 1min interval
-  - [ ] EvaluateApprovalPolicy called after every approve/reject action
-  - [ ] RecordStageTransition handles rework regression correctly
-  - [ ] Case rework_count incremented on SEND_TO_REWORK
-  - [ ] CASE_MAX_REWORK_EXCEEDED logic tested with max_rework_attempts
-  - [ ] GetApprovalHistory query tested with JOIN on users table
+  - [ ] notification_templates seeded with standard templates:
+        CASE_CREATED, TASK_ASSIGNED, APPROVAL_REJECTED,
+        SLA_WARNING, STAGE_CHANGED
+  - [ ] notification_triggers seeded for key events
+  - [ ] TemplateRenderer.ValidateTemplate tested with 100% coverage
+  - [ ] HandleEvent updated to check triggers after every event
+  - [ ] NotificationDispatcher registered in main.go with 10s interval
+  - [ ] At least 3 channel adapters implemented and unit tested
+  - [ ] Circuit breaker state transitions tested with time mocking
+  - [ ] Deduplication logic tested with window edge cases
+  - [ ] User preferences table seeded with test data
+  - [ ] GetNotificationHistory query tested with 10k+ notifications
   - [ ] Prometheus metrics registered:
-        approvals_granted_total{case_type, tier}
-        approvals_rejected_total{case_type, tier}
-        approvals_expired_total{case_type, timeout_action}
-        approval_decision_latency_seconds{case_type, tier}
-        rework_loops_total{case_type}
+        notifications_queued_total{channel, trigger}
+        notifications_sent_total{channel}
+        notifications_failed_total{channel, reason}
+        notifications_suppressed_total{reason}
+        circuit_breaker_state{channel}
+        notification_dispatch_latency_seconds{channel}
   - [ ] Alert rules defined:
-        approvals_expired_total{timeout_action="AUTO_REJECT"} > 10/hour
-        rework_loops_total > 100/day
-  - [ ] Load test: 1000 concurrent approval decisions on same gate
-  - [ ] Audit trail verified: every action logged in approval_audit_log
+        notifications_failed_total{channel="EMAIL"} > 100/hour
+        circuit_breaker_state{state="OPEN"} for 10 minutes
+        notifications_suppressed_total{reason="OPT_OUT"} spike
+  - [ ] Load test: 10k notifications queued and dispatched in 5 minutes
+  - [ ] Email delivery tracking tested with real email service
+  - [ ] Correspondence audit log verified complete for sample case
 
 ═══════════════════════════════════════════════════════════════
 CONSTRAINTS — NEVER VIOLATE THESE
 ═══════════════════════════════════════════════════════════════
 - No breaking changes to tasks, cases, or events tables
-- All approval decisions must be recorded immutably in audit log
-- Approval expiry detection must be idempotent
-- Gate evaluation must handle concurrent approvals via optimistic lock
-- Rework loops must preserve full history (do not delete old gates)
-- Expression evaluator must not panic on invalid syntax (return error)
-- Every decision requires decision_text and evidence_refs (may be empty array)
-- Delegated approvals must preserve full delegation chain
-- Authority limits are checked at selection time, not decision time
+- All notifications go through notification_queue (outbox pattern)
+- Template rendering must never panic on invalid input (return error)
+- Circuit breaker state is per-channel, not global
+- Deduplication window is configurable per trigger, not hardcoded
+- User preferences must be checked before every send
+- Delivery events are append-only, never updated
+- Channel adapters must distinguish transient from permanent errors
+- Dispatcher must be idempotent (safe to run multiple instances)
 - Do not analyse any other capability dimension
 ═══════════════════════════════════════════════════════════════

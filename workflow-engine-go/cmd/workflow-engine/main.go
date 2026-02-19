@@ -9,13 +9,15 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
-	"workflow-engine/internal/database"
 	"workflow-engine/internal/approval"
+	"workflow-engine/internal/database"
 	"workflow-engine/internal/engine"
 	"workflow-engine/internal/engine/assignment"
+	"workflow-engine/internal/notification"
 	"workflow-engine/internal/repository"
 	"workflow-engine/internal/sla"
 
@@ -73,6 +75,68 @@ func main() {
 	approvalEvaluator := approval.NewApprovalPolicyEvaluator(sqlxDB, slog.Default(), nil)
 	approvalExpirySweepJob := approval.NewApprovalExpirySweepJob(sqlxDB, nil, approvalEvaluator, 1*time.Minute, 500, slog.Default())
 
+	notificationRenderer := notification.NewTemplateRenderer()
+	notificationService := notification.NewNotificationService(
+		sqlxDB,
+		notificationRenderer,
+		&approval.ExpressionEvaluator{},
+		nil,
+		slog.Default(),
+	)
+	workflowEngine.SetEventObserver(notificationService)
+
+	notificationChannels := map[string]notification.NotificationChannel{
+		"IN_APP": notification.NewInAppChannel(sqlxDB, slog.Default()),
+	}
+
+	smtpHost := strings.TrimSpace(os.Getenv("SMTP_HOST"))
+	smtpPort := 587
+	if smtpPortRaw := strings.TrimSpace(os.Getenv("SMTP_PORT")); smtpPortRaw != "" {
+		if parsed, parseErr := strconv.Atoi(smtpPortRaw); parseErr == nil && parsed > 0 {
+			smtpPort = parsed
+		}
+	}
+	smtpFrom := strings.TrimSpace(os.Getenv("SMTP_FROM"))
+	if smtpHost != "" && smtpFrom != "" {
+		notificationChannels["EMAIL"] = notification.NewEmailChannel(
+			smtpHost,
+			smtpPort,
+			smtpFrom,
+			strings.TrimSpace(os.Getenv("SMTP_USERNAME")),
+			os.Getenv("SMTP_PASSWORD"),
+			slog.Default(),
+		)
+	} else {
+		slog.Warn("EMAIL channel adapter disabled; set SMTP_HOST and SMTP_FROM to enable dispatch")
+	}
+
+	smsSID := strings.TrimSpace(os.Getenv("TWILIO_ACCOUNT_SID"))
+	smsToken := os.Getenv("TWILIO_AUTH_TOKEN")
+	smsFrom := strings.TrimSpace(os.Getenv("TWILIO_FROM_NUMBER"))
+	if smsSID != "" && smsToken != "" && smsFrom != "" {
+		notificationChannels["SMS"] = notification.NewSMSChannel(
+			smsSID,
+			smsToken,
+			smsFrom,
+			nil,
+			slog.Default(),
+		)
+	} else {
+		slog.Warn("SMS channel adapter disabled; set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_FROM_NUMBER to enable dispatch")
+	}
+
+	notificationDispatcher := notification.NewNotificationDispatcher(
+		sqlxDB,
+		notificationRenderer,
+		notificationChannels,
+		notification.NewCircuitBreaker(sqlxDB, 10, 5*time.Minute, 3, slog.Default(), nil),
+		10*time.Second,
+		500,
+		5,
+		slog.Default(),
+		nil,
+	)
+
 	// Health Check Server
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -91,6 +155,7 @@ func main() {
 
 	// Case management API
 	engine.RegisterCaseHandlers(mux, repo)
+	notification.RegisterNotificationHandlers(mux, sqlxDB, slog.Default())
 
 	srv := &http.Server{
 		Addr:    ":8080",
@@ -115,6 +180,8 @@ func main() {
 		workflowEngine.Start(ctx)
 		close(engineDone)
 	}()
+
+	go notificationDispatcher.Start(ctx)
 
 	// Start Sweepers
 	go func() {

@@ -5,7 +5,7 @@ CREATE TABLE case_definitions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name VARCHAR(255) NOT NULL UNIQUE,
     description TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 2. Version Registry: Pins a complete workflow structure to a version
@@ -14,7 +14,7 @@ CREATE TABLE version_registry (
     case_definition_id UUID NOT NULL REFERENCES case_definitions(id),
     version INT NOT NULL,
     status VARCHAR(50) NOT NULL DEFAULT 'DRAFT', -- DRAFT, ACTIVE, ARCHIVED
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(case_definition_id, version)
 );
 
@@ -29,7 +29,7 @@ CREATE TABLE workflow_components (
     execution_strategy VARCHAR(50) NOT NULL DEFAULT 'SEQUENTIAL', -- SEQUENTIAL, PARALLEL
     execution_order INT NOT NULL DEFAULT 0,
     config JSONB, -- UI config, Integration endpoints, etc.
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Index for tree traversal
@@ -44,7 +44,7 @@ CREATE TABLE component_hooks (
     action VARCHAR(50) NOT NULL, -- NOTIFY, WEBHOOK, LAMBDA
     config JSONB,
     execution_order INT DEFAULT 0,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 5. Updated Cases Table (referencing the new version registry)
@@ -57,8 +57,8 @@ CREATE TABLE cases (
     pinned_version_id UUID NOT NULL REFERENCES version_registry(id),
     global_status VARCHAR(50) NOT NULL,
     applicant_data JSONB,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 */
 
@@ -66,13 +66,13 @@ CREATE TABLE cases (
 -- Replaces old 'task_instances' and 'stage_instances'
 CREATE TABLE component_instances (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    case_id UUID NOT NULL REFERENCES cases(id) ON DELETE CASCADE, -- Assuming 'cases' exists
+    case_id UUID NOT NULL, -- FK to cases added in 000007
     component_id UUID NOT NULL REFERENCES workflow_components(id),
     status VARCHAR(50) NOT NULL, -- PENDING, IN_PROGRESS, COMPLETED, FAILED, SKIPPED
     data_payload JSONB, -- Task output or input
-    started_at TIMESTAMP,
-    completed_at TIMESTAMP,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX idx_component_instances_case ON component_instances(case_id);

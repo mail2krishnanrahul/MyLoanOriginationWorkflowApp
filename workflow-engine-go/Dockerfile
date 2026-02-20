@@ -1,27 +1,53 @@
 # Build Stage
-FROM alpine:latest AS builder
+FROM golang:1.24-alpine AS builder
+
+# Install build dependencies
+RUN apk update && apk add --no-cache git ca-certificates tzdata
 
 WORKDIR /app
 
-# Install Go
-RUN apk add --no-cache go
+# Create appuser
+ENV USER=appuser
+ENV UID=10001
+RUN adduser \
+    --disabled-password \
+    --gecos "" \
+    --home "/nonexistent" \
+    --shell "/sbin/nologin" \
+    --no-create-home \
+    --uid "${UID}" \
+    "${USER}"
 
-# Copy source
+# Copy dependencies first for caching
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Build the application
+# Copy source
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o workflow-engine ./cmd/workflow-engine
+
+# Build the application
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s" -o workflow-engine ./cmd/workflow-engine
 
 # Runtime Stage
-FROM alpine:latest
+FROM scratch
+
+# Import user and group files from builder
+COPY --from=builder /etc/passwd /etc/passwd
+COPY --from=builder /etc/group /etc/group
+
+# Import CA certs and tzdata
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
 
 WORKDIR /
 
+# Copy executable
 COPY --from=builder /app/workflow-engine /workflow-engine
 
-# Expose Health Check Port
+# Use an unprivileged user
+USER appuser:appuser
+
+# Expose HTTP port
 EXPOSE 8080
 
 ENTRYPOINT ["/workflow-engine"]

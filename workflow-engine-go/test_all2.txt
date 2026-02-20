@@ -1,0 +1,231 @@
+?   	workflow-engine/cmd/dsl-test	[no test files]
+?   	workflow-engine/cmd/integration-test	[no test files]
+?   	workflow-engine/cmd/workflow-engine	[no test files]
+ok  	workflow-engine/internal/approval	(cached)
+?   	workflow-engine/internal/database	[no test files]
+?   	workflow-engine/internal/db	[no test files]
+ok  	workflow-engine/internal/document	(cached)
+ok  	workflow-engine/internal/engine	(cached)
+ok  	workflow-engine/internal/engine/assignment	(cached)
+--- FAIL: TestResolveRetryPolicy_FailureMode (0.00s)
+    classifier_test.go:327: 
+        	Error Trace:	C:/MyProjects/MyLoanOriginationWorkflowApp/workflow-engine-go/internal/exception/classifier_test.go:327
+        	Error:      	Not equal: 
+        	            	expected: 0
+        	            	actual  : 3
+        	Test:       	TestResolveRetryPolicy_FailureMode
+--- FAIL: TestSagaCompensation_HappyPath (0.00s)
+    compensation_test.go:67: 
+        	Error Trace:	C:/MyProjects/MyLoanOriginationWorkflowApp/workflow-engine-go/internal/exception/compensation_test.go:67
+        	Error:      	Received unexpected error:
+        	            	startCompensation: publish event: PublishEvent: ExecQuery '
+        	            			INSERT INTO events_outbox (
+        	            				tenant_id,
+        	            				case_id,
+        	            				task_id,
+        	            				event_type,
+        	            				payload,
+        	            				status,
+        	            				target_service,
+        	            				max_attempts,
+        	            				partition_key,
+        	            				trace_id
+        	            			) VALUES (
+        	            				$1::uuid,
+        	            				$2::uuid,
+        	            				$3::uuid,
+        	            				$4,
+        	            				$5::jsonb,
+        	            				$6,
+        	            				$7,
+        	            				$8,
+        	            				$9,
+        	            				$10
+        	            			)
+        	            		', arguments do not match: argument 1 expected [<nil> - <nil>] does not match actual [string - case-1]
+        	Test:       	TestSagaCompensation_HappyPath
+    compensation_test.go:70: 
+        	Error Trace:	C:/MyProjects/MyLoanOriginationWorkflowApp/workflow-engine-go/internal/exception/compensation_test.go:70
+        	Error:      	Received unexpected error:
+        	            	call to Commit transaction, was not expected, next expectation is: ExpectedExec => expecting Exec or ExecContext which:
+        	            	  - matches sql: '(?s)INSERT INTO events_outbox'
+        	            	  - is with arguments:
+        	            	    0 - {}
+        	            	    1 - <nil>
+        	            	    2 - task-1
+        	            	    3 - COMPENSATION_STARTED
+        	            	    4 - {}
+        	            	    5 - PENDING
+        	            	    6 - case-orchestrator
+        	            	    7 - 5
+        	            	    8 - {}
+        	            	    9 - {}
+        	            	  - should return Result having:
+        	            	      LastInsertId: 0
+        	            	      RowsAffected: 1
+        	Test:       	TestSagaCompensation_HappyPath
+    compensation_test.go:71: 
+        	Error Trace:	C:/MyProjects/MyLoanOriginationWorkflowApp/workflow-engine-go/internal/exception/compensation_test.go:71
+        	Error:      	Received unexpected error:
+        	            	there is a remaining expectation which was not matched: ExpectedExec => expecting Exec or ExecContext which:
+        	            	  - matches sql: '(?s)INSERT INTO events_outbox'
+        	            	  - is with arguments:
+        	            	    0 - {}
+        	            	    1 - <nil>
+        	            	    2 - task-1
+        	            	    3 - COMPENSATION_STARTED
+        	            	    4 - {}
+        	            	    5 - PENDING
+        	            	    6 - case-orchestrator
+        	            	    7 - 5
+        	            	    8 - {}
+        	            	    9 - {}
+        	            	  - should return Result having:
+        	            	      LastInsertId: 0
+        	            	      RowsAffected: 1
+        	Test:       	TestSagaCompensation_HappyPath
+--- FAIL: TestSagaCompensation_EdgeCase (0.00s)
+    compensation_test.go:109: 
+        	Error Trace:	C:/MyProjects/MyLoanOriginationWorkflowApp/workflow-engine-go/internal/exception/compensation_test.go:109
+        	Error:      	Received unexpected error:
+        	            	startCompensation: publish event: PublishEvent: ExecQuery '
+        	            			INSERT INTO events_outbox (
+        	            				tenant_id,
+        	            				case_id,
+        	            				task_id,
+        	            				event_type,
+        	            				payload,
+        	            				status,
+        	            				target_service,
+        	            				max_attempts,
+        	            				partition_key,
+        	            				trace_id
+        	            			) VALUES (
+        	            				$1::uuid,
+        	            				$2::uuid,
+        	            				$3::uuid,
+        	            				$4,
+        	            				$5::jsonb,
+        	            				$6,
+        	            				$7,
+        	            				$8,
+        	            				$9,
+        	            				$10
+        	            			)
+        	            		', arguments do not match: argument 1 expected [<nil> - <nil>] does not match actual [string - case-edge]
+        	Test:       	TestSagaCompensation_EdgeCase
+    compensation_test.go:112: 
+        	Error Trace:	C:/MyProjects/MyLoanOriginationWorkflowApp/workflow-engine-go/internal/exception/compensation_test.go:112
+        	Error:      	Received unexpected error:
+        	            	call to Commit transaction, was not expected, next expectation is: ExpectedExec => expecting Exec or ExecContext which:
+        	            	  - matches sql: '(?s)INSERT INTO events_outbox'
+        	            	  - is with arguments:
+        	            	    0 - {}
+        	            	    1 - <nil>
+        	            	    2 - task-edge
+        	            	    3 - COMPENSATION_STARTED
+        	            	    4 - {}
+        	            	    5 - PENDING
+        	            	    6 - case-orchestrator
+        	            	    7 - 5
+        	            	    8 - {}
+        	            	    9 - {}
+        	            	  - should return Result having:
+        	            	      LastInsertId: 0
+        	            	      RowsAffected: 1
+        	Test:       	TestSagaCompensation_EdgeCase
+    compensation_test.go:113: 
+        	Error Trace:	C:/MyProjects/MyLoanOriginationWorkflowApp/workflow-engine-go/internal/exception/compensation_test.go:113
+        	Error:      	Received unexpected error:
+        	            	there is a remaining expectation which was not matched: ExpectedExec => expecting Exec or ExecContext which:
+        	            	  - matches sql: '(?s)INSERT INTO events_outbox'
+        	            	  - is with arguments:
+        	            	    0 - {}
+        	            	    1 - <nil>
+        	            	    2 - task-edge
+        	            	    3 - COMPENSATION_STARTED
+        	            	    4 - {}
+        	            	    5 - PENDING
+        	            	    6 - case-orchestrator
+        	            	    7 - 5
+        	            	    8 - {}
+        	            	    9 - {}
+        	            	  - should return Result having:
+        	            	      LastInsertId: 0
+        	            	      RowsAffected: 1
+        	Test:       	TestSagaCompensation_EdgeCase
+2026/02/20 22:44:01 WARN DLQ entry requeued dlq_id=dlq-1 task_id=task-1 operator_id=operator-1
+--- FAIL: TestDeadLetterQueue_HappyPath (0.00s)
+    dashboard_test.go:109: 
+        	Error Trace:	C:/MyProjects/MyLoanOriginationWorkflowApp/workflow-engine-go/internal/exception/dashboard_test.go:109
+        	Error:      	Received unexpected error:
+        	            	call to Commit transaction, was not expected, next expectation is: ExpectedExec => expecting Exec or ExecContext which:
+        	            	  - matches sql: 'INSERT INTO events_outbox'
+        	            	  - is without arguments
+        	            	  - should return Result having:
+        	            	      LastInsertId: 0
+        	            	      RowsAffected: 1
+        	Test:       	TestDeadLetterQueue_HappyPath
+    dashboard_test.go:110: 
+        	Error Trace:	C:/MyProjects/MyLoanOriginationWorkflowApp/workflow-engine-go/internal/exception/dashboard_test.go:110
+        	Error:      	Received unexpected error:
+        	            	there is a remaining expectation which was not matched: ExpectedExec => expecting Exec or ExecContext which:
+        	            	  - matches sql: 'INSERT INTO events_outbox'
+        	            	  - is without arguments
+        	            	  - should return Result having:
+        	            	      LastInsertId: 0
+        	            	      RowsAffected: 1
+        	Test:       	TestDeadLetterQueue_HappyPath
+2026/02/20 22:44:01 WARN DLQ entry requeued dlq_id=dlq-2 task_id=task-2 operator_id=operator-2
+--- FAIL: TestDeadLetterQueue_EdgeCase (0.00s)
+    dashboard_test.go:141: 
+        	Error Trace:	C:/MyProjects/MyLoanOriginationWorkflowApp/workflow-engine-go/internal/exception/dashboard_test.go:141
+        	Error:      	Received unexpected error:
+        	            	call to Commit transaction, was not expected, next expectation is: ExpectedExec => expecting Exec or ExecContext which:
+        	            	  - matches sql: 'INSERT INTO events_outbox'
+        	            	  - is without arguments
+        	            	  - should return Result having:
+        	            	      LastInsertId: 0
+        	            	      RowsAffected: 1
+        	Test:       	TestDeadLetterQueue_EdgeCase
+    dashboard_test.go:142: 
+        	Error Trace:	C:/MyProjects/MyLoanOriginationWorkflowApp/workflow-engine-go/internal/exception/dashboard_test.go:142
+        	Error:      	Received unexpected error:
+        	            	there is a remaining expectation which was not matched: ExpectedExec => expecting Exec or ExecContext which:
+        	            	  - matches sql: 'INSERT INTO events_outbox'
+        	            	  - is without arguments
+        	            	  - should return Result having:
+        	            	      LastInsertId: 0
+        	            	      RowsAffected: 1
+        	Test:       	TestDeadLetterQueue_EdgeCase
+FAIL
+FAIL	workflow-engine/internal/exception	0.212s
+--- FAIL: TestDispatchWebhook_Non200SchedulesRetry (0.00s)
+    integration_test.go:115: 
+        	Error Trace:	C:/MyProjects/MyLoanOriginationWorkflowApp/workflow-engine-go/internal/integration/integration_test.go:115
+        	Error:      	Received unexpected error:
+        	            	DispatchWebhook: load subscription: sql: Scan error on column index 4, name "event_types": unsupported Scan, storing driver.Value type string into type *[]string
+        	Test:       	TestDispatchWebhook_Non200SchedulesRetry
+--- FAIL: TestDispatchWebhook_MaxAttemptsReachedSetsAbandoned (0.00s)
+    integration_test.go:153: 
+        	Error Trace:	C:/MyProjects/MyLoanOriginationWorkflowApp/workflow-engine-go/internal/integration/integration_test.go:153
+        	Error:      	Received unexpected error:
+        	            	DispatchWebhook: load subscription: sql: Scan error on column index 4, name "event_types": unsupported Scan, storing driver.Value type string into type *[]string
+        	Test:       	TestDispatchWebhook_MaxAttemptsReachedSetsAbandoned
+--- FAIL: TestDispatchWebhook_FailureCountReachesMaxMarksSubscriptionFailed (0.00s)
+    integration_test.go:194: 
+        	Error Trace:	C:/MyProjects/MyLoanOriginationWorkflowApp/workflow-engine-go/internal/integration/integration_test.go:194
+        	Error:      	Received unexpected error:
+        	            	DispatchWebhook: load subscription: sql: Scan error on column index 4, name "event_types": unsupported Scan, storing driver.Value type string into type *[]string
+        	Test:       	TestDispatchWebhook_FailureCountReachesMaxMarksSubscriptionFailed
+FAIL
+FAIL	workflow-engine/internal/integration	0.214s
+ok  	workflow-engine/internal/multitenancy	(cached)
+ok  	workflow-engine/internal/notification	(cached)
+?   	workflow-engine/internal/parser	[no test files]
+ok  	workflow-engine/internal/reporting	(cached)
+ok  	workflow-engine/internal/repository	(cached)
+ok  	workflow-engine/internal/sla	(cached)
+ok  	workflow-engine/internal/versioning	(cached)
+?   	workflow-engine/pkg/model	[no test files]
+FAIL

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"workflow-engine/internal/integration"
+	"workflow-engine/internal/multitenancy"
 	"workflow-engine/pkg/model"
 
 	"github.com/jmoiron/sqlx"
@@ -55,12 +57,18 @@ func PublishEvent(ctx context.Context, tx *sqlx.Tx, event model.Event) error {
 	if event.MaxAttempts == 0 {
 		event.MaxAttempts = 5
 	}
+	prepared, err := multitenancy.PrepareEventForPublish(ctx, event)
+	if err != nil {
+		return fmt.Errorf("PublishEvent: enrich tenant payload: %w", err)
+	}
+	event = prepared
 	if event.PartitionKey == nil && event.CaseID != nil {
 		event.PartitionKey = event.CaseID
 	}
 
-	_, err := tx.ExecContext(ctx, `
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO events_outbox (
+			tenant_id,
 			case_id,
 			task_id,
 			event_type,
@@ -73,17 +81,21 @@ func PublishEvent(ctx context.Context, tx *sqlx.Tx, event model.Event) error {
 		) VALUES (
 			$1::uuid,
 			$2::uuid,
-			$3,
-			$4::jsonb,
-			$5,
+			$3::uuid,
+			$4,
+			$5::jsonb,
 			$6,
 			$7,
 			$8,
-			$9
+			$9,
+			$10
 		)
-	`, event.CaseID, event.TaskID, string(event.EventType), event.Payload, string(event.Status), event.TargetService, event.MaxAttempts, event.PartitionKey, event.TraceID)
+	`, event.TenantID, event.CaseID, event.TaskID, string(event.EventType), event.Payload, string(event.Status), event.TargetService, event.MaxAttempts, event.PartitionKey, event.TraceID)
 	if err != nil {
 		return fmt.Errorf("PublishEvent: %w", err)
+	}
+	if err := integration.EnqueueWebhookDeliveries(ctx, tx, event.TenantID, event); err != nil {
+		return fmt.Errorf("PublishEvent: enqueue webhook deliveries: %w", err)
 	}
 	return nil
 }

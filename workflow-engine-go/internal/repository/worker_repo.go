@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
+	"workflow-engine/internal/multitenancy"
 	"workflow-engine/pkg/model"
 )
 
@@ -20,6 +22,16 @@ func (r *Repository) ClaimTasks(ctx context.Context, service string, batchSize i
 	if batchSize <= 0 {
 		batchSize = 10
 	}
+	tenantID, err := multitenancy.TenantFromContext(ctx)
+	if err != nil {
+		tenantID = multitenancy.DefaultTenantID
+		ctx = multitenancy.WithTenant(ctx, tenantID)
+	}
+	if r.SQLX != nil {
+		if err := multitenancy.EnforceTenantTaskLimits(ctx, r.SQLX, tenantID); err != nil {
+			return nil, fmt.Errorf("ClaimTasks: enforce tenant task limits: %w", err)
+		}
+	}
 
 	tx, err := r.Pool.Begin(ctx)
 	if err != nil {
@@ -28,8 +40,9 @@ func (r *Repository) ClaimTasks(ctx context.Context, service string, batchSize i
 	defer tx.Rollback(ctx)
 
 	// 1. Select and lock claimable tasks
-	rows, err := tx.Query(ctx, `
+	baseQuery := `
 		SELECT id, case_id, task_definition_code, activity_code, stage_code,
+		       tenant_id::text AS tenant_id,
 		       status, priority, assigned_service,
 		       assigned_at, started_at, completed_at, due_at,
 		       retry_count, max_retries,
@@ -39,11 +52,16 @@ func (r *Repository) ClaimTasks(ctx context.Context, service string, batchSize i
 		WHERE status = 'PENDING'
 		  AND (assigned_service IS NULL OR assigned_service = $1)
 		  AND (due_at IS NULL OR due_at <= now())
+		  AND (next_retry_at IS NULL OR next_retry_at <= now())
+		  AND (is_poison_pill = FALSE OR is_poison_pill IS NULL)
 		ORDER BY priority DESC, due_at ASC NULLS LAST
 		LIMIT $2
-		FOR UPDATE SKIP LOCKED`,
-		service, batchSize,
-	)
+		FOR UPDATE SKIP LOCKED`
+	query, args, scopeErr := multitenancy.AssertTenantScope(ctx, baseQuery, []interface{}{service, batchSize})
+	if scopeErr != nil {
+		return nil, fmt.Errorf("ClaimTasks: %w", scopeErr)
+	}
+	rows, err := tx.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query claimable tasks: %w", err)
 	}
@@ -57,6 +75,7 @@ func (r *Repository) ClaimTasks(ctx context.Context, service string, batchSize i
 		var priority int
 		if err := rows.Scan(
 			&t.ID, &t.CaseID, &t.TaskDefinitionCode, &t.ActivityCode, &t.StageCode,
+			&t.TenantID,
 			&status, &priority, &t.AssignedService,
 			&t.AssignedAt, &t.StartedAt, &t.CompletedAt, &t.DueAt,
 			&t.RetryCount, &t.MaxRetries,
@@ -86,8 +105,9 @@ func (r *Repository) ClaimTasks(ctx context.Context, service string, batchSize i
 		    assigned_at       = now(),
 		    last_heartbeat_at = now(),
 		    version           = version + 1
-		WHERE id = ANY($2::uuid[])`,
-		service, ids,
+		WHERE id = ANY($2::uuid[])
+		  AND tenant_id = $3::uuid`,
+		service, ids, tenantID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to mark tasks as ASSIGNED: %w", err)
@@ -103,9 +123,36 @@ func (r *Repository) ClaimTasks(ctx context.Context, service string, batchSize i
 		tasks[i].Status = model.TaskStatusAssigned
 		tasks[i].AssignedService = &service
 		tasks[i].AssignedAt = &now
+		multitenancy.IncTasksClaimed(tenantID, service)
 	}
 
 	return tasks, nil
+}
+
+// ReleaseTaskClaim clears ASSIGNED claim state when no in-process handler can execute the task.
+func (r *Repository) ReleaseTaskClaim(ctx context.Context, taskID string) error {
+	if strings.TrimSpace(taskID) == "" {
+		return fmt.Errorf("ReleaseTaskClaim: taskID is required")
+	}
+	if _, err := multitenancy.TenantFromContext(ctx); err != nil {
+		ctx = multitenancy.WithTenant(ctx, multitenancy.DefaultTenantID)
+	}
+	query, args, scopeErr := multitenancy.AssertTenantScope(ctx, `
+		UPDATE tasks
+		SET status = 'PENDING',
+		    assigned_service = NULL,
+		    assigned_at = NULL,
+		    last_heartbeat_at = NULL,
+		    version = version + 1
+		WHERE id = $1::uuid
+		  AND status = 'ASSIGNED'`, []interface{}{taskID})
+	if scopeErr != nil {
+		return fmt.Errorf("ReleaseTaskClaim: %w", scopeErr)
+	}
+	if _, err := r.Pool.Exec(ctx, query, args...); err != nil {
+		return fmt.Errorf("ReleaseTaskClaim: release claim: %w", err)
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -113,13 +160,18 @@ func (r *Repository) ClaimTasks(ctx context.Context, service string, batchSize i
 // ---------------------------------------------------------------------------
 
 func (r *Repository) Heartbeat(ctx context.Context, taskID string) error {
-	tag, err := r.Pool.Exec(ctx, `
+	if _, err := multitenancy.TenantFromContext(ctx); err != nil {
+		ctx = multitenancy.WithTenant(ctx, multitenancy.DefaultTenantID)
+	}
+	query, args, scopeErr := multitenancy.AssertTenantScope(ctx, `
 		UPDATE tasks
 		SET last_heartbeat_at = now()
 		WHERE id = $1::uuid
-		  AND status IN ('ASSIGNED', 'IN_PROGRESS')`,
-		taskID,
-	)
+		  AND status IN ('ASSIGNED', 'IN_PROGRESS')`, []interface{}{taskID})
+	if scopeErr != nil {
+		return fmt.Errorf("Heartbeat: %w", scopeErr)
+	}
+	tag, err := r.Pool.Exec(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("failed to heartbeat task %s: %w", taskID, err)
 	}
@@ -135,9 +187,12 @@ func (r *Repository) Heartbeat(ctx context.Context, taskID string) error {
 // ---------------------------------------------------------------------------
 
 func (r *Repository) ReclaimStaleTasks(ctx context.Context, staleDuration time.Duration) (int, error) {
+	if _, err := multitenancy.TenantFromContext(ctx); err != nil {
+		ctx = multitenancy.WithTenant(ctx, multitenancy.DefaultTenantID)
+	}
 	cutoff := time.Now().UTC().Add(-staleDuration)
 
-	tag, err := r.Pool.Exec(ctx, `
+	query, args, scopeErr := multitenancy.AssertTenantScope(ctx, `
 		UPDATE tasks
 		SET status            = 'PENDING',
 		    assigned_service  = NULL,
@@ -146,9 +201,11 @@ func (r *Repository) ReclaimStaleTasks(ctx context.Context, staleDuration time.D
 		    version           = version + 1
 		WHERE status IN ('ASSIGNED', 'IN_PROGRESS')
 		  AND last_heartbeat_at < $1
-		  AND last_heartbeat_at IS NOT NULL`,
-		cutoff,
-	)
+		  AND last_heartbeat_at IS NOT NULL`, []interface{}{cutoff})
+	if scopeErr != nil {
+		return 0, fmt.Errorf("ReclaimStaleTasks: %w", scopeErr)
+	}
+	tag, err := r.Pool.Exec(ctx, query, args...)
 	if err != nil {
 		return 0, fmt.Errorf("failed to reclaim stale tasks: %w", err)
 	}
@@ -162,17 +219,23 @@ func (r *Repository) ReclaimStaleTasks(ctx context.Context, staleDuration time.D
 // ---------------------------------------------------------------------------
 
 func (r *Repository) ScheduleRetry(ctx context.Context, tx DBExecutor, taskID string, baseInterval time.Duration) error {
+	if _, err := multitenancy.TenantFromContext(ctx); err != nil {
+		ctx = multitenancy.WithTenant(ctx, multitenancy.DefaultTenantID)
+	}
 	if tx == nil {
 		tx = r.Pool
 	}
 
 	var retryCount, maxRetries int
-	err := tx.QueryRow(ctx, `
+	query, args, scopeErr := multitenancy.AssertTenantScope(ctx, `
 		SELECT retry_count, max_retries
 		FROM tasks
 		WHERE id = $1::uuid
-		FOR UPDATE`, taskID,
-	).Scan(&retryCount, &maxRetries)
+		FOR UPDATE`, []interface{}{taskID})
+	if scopeErr != nil {
+		return fmt.Errorf("ScheduleRetry: %w", scopeErr)
+	}
+	err := tx.QueryRow(ctx, query, args...).Scan(&retryCount, &maxRetries)
 	if err != nil {
 		return fmt.Errorf("failed to read retry state for task %s: %w", taskID, err)
 	}
@@ -186,7 +249,7 @@ func (r *Repository) ScheduleRetry(ctx context.Context, tx DBExecutor, taskID st
 	backoff := time.Duration(math.Pow(2, float64(retryCount))) * baseInterval
 	nextRetry := time.Now().UTC().Add(backoff)
 
-	_, err = tx.Exec(ctx, `
+	updateQuery, updateArgs, scopeErr := multitenancy.AssertTenantScope(ctx, `
 		UPDATE tasks
 		SET status        = 'PENDING',
 		    retry_count   = $1,
@@ -196,9 +259,11 @@ func (r *Repository) ScheduleRetry(ctx context.Context, tx DBExecutor, taskID st
 		    last_heartbeat_at = NULL,
 		    error_detail      = NULL,
 		    version           = version + 1
-		WHERE id = $3::uuid`,
-		newRetryCount, nextRetry, taskID,
-	)
+		WHERE id = $3::uuid`, []interface{}{newRetryCount, nextRetry, taskID})
+	if scopeErr != nil {
+		return fmt.Errorf("ScheduleRetry: %w", scopeErr)
+	}
+	_, err = tx.Exec(ctx, updateQuery, updateArgs...)
 	if err != nil {
 		return fmt.Errorf("failed to schedule retry for task %s: %w", taskID, err)
 	}

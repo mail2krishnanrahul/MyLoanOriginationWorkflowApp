@@ -1,0 +1,231 @@
+=== RUN   TestTaskLevelErrorClassification_HappyPath
+=== RUN   TestTaskLevelErrorClassification_HappyPath/transient_timeout
+=== RUN   TestTaskLevelErrorClassification_HappyPath/permanent_validation
+--- PASS: TestTaskLevelErrorClassification_HappyPath (0.00s)
+    --- PASS: TestTaskLevelErrorClassification_HappyPath/transient_timeout (0.00s)
+    --- PASS: TestTaskLevelErrorClassification_HappyPath/permanent_validation (0.00s)
+=== RUN   TestTaskLevelErrorClassification_EdgeCase
+=== RUN   TestTaskLevelErrorClassification_EdgeCase/unknown_code_is_unknown_class
+=== RUN   TestTaskLevelErrorClassification_EdgeCase/case_and_separator_normalization
+--- PASS: TestTaskLevelErrorClassification_EdgeCase (0.00s)
+    --- PASS: TestTaskLevelErrorClassification_EdgeCase/unknown_code_is_unknown_class (0.00s)
+    --- PASS: TestTaskLevelErrorClassification_EdgeCase/case_and_separator_normalization (0.00s)
+=== RUN   TestTaskLevelErrorClassification_FailureMode
+=== RUN   TestTaskLevelErrorClassification_FailureMode/nil_error_falls_back_to_unknown_code
+=== RUN   TestTaskLevelErrorClassification_FailureMode/typed_coded_error_wins
+--- PASS: TestTaskLevelErrorClassification_FailureMode (0.00s)
+    --- PASS: TestTaskLevelErrorClassification_FailureMode/nil_error_falls_back_to_unknown_code (0.00s)
+    --- PASS: TestTaskLevelErrorClassification_FailureMode/typed_coded_error_wins (0.00s)
+=== RUN   TestRetryPolicyEngine_HappyPath
+=== RUN   TestRetryPolicyEngine_HappyPath/exponential_backoff
+=== RUN   TestRetryPolicyEngine_HappyPath/linear_backoff
+--- PASS: TestRetryPolicyEngine_HappyPath (0.00s)
+    --- PASS: TestRetryPolicyEngine_HappyPath/exponential_backoff (0.00s)
+    --- PASS: TestRetryPolicyEngine_HappyPath/linear_backoff (0.00s)
+=== RUN   TestRetryPolicyEngine_EdgeCase
+=== RUN   TestRetryPolicyEngine_EdgeCase/max_interval_caps_exponential_growth
+--- PASS: TestRetryPolicyEngine_EdgeCase (0.00s)
+    --- PASS: TestRetryPolicyEngine_EdgeCase/max_interval_caps_exponential_growth (0.00s)
+=== RUN   TestRetryPolicyEngine_FailureMode
+=== RUN   TestRetryPolicyEngine_FailureMode/invalid_attempt_number
+=== RUN   TestRetryPolicyEngine_FailureMode/invalid_base_interval
+--- PASS: TestRetryPolicyEngine_FailureMode (0.00s)
+    --- PASS: TestRetryPolicyEngine_FailureMode/invalid_attempt_number (0.00s)
+    --- PASS: TestRetryPolicyEngine_FailureMode/invalid_base_interval (0.00s)
+=== RUN   TestErrorDetailCapture_HappyPath
+=== RUN   TestErrorDetailCapture_HappyPath/captures_code_class_message_source_and_upstream
+--- PASS: TestErrorDetailCapture_HappyPath (0.00s)
+    --- PASS: TestErrorDetailCapture_HappyPath/captures_code_class_message_source_and_upstream (0.00s)
+=== RUN   TestErrorDetailCapture_EdgeCase
+--- PASS: TestErrorDetailCapture_EdgeCase (0.00s)
+=== RUN   TestErrorDetailCapture_FailureMode
+--- PASS: TestErrorDetailCapture_FailureMode (0.00s)
+=== RUN   TestPoisonPillDetection_HappyPath
+--- PASS: TestPoisonPillDetection_HappyPath (0.00s)
+=== RUN   TestPoisonPillDetection_EdgeCase
+--- PASS: TestPoisonPillDetection_EdgeCase (0.00s)
+=== RUN   TestPoisonPillDetection_FailureMode
+--- PASS: TestPoisonPillDetection_FailureMode (0.00s)
+=== RUN   TestCaseLevelExceptionEscalation_HappyPath
+--- PASS: TestCaseLevelExceptionEscalation_HappyPath (0.00s)
+=== RUN   TestCaseLevelExceptionEscalation_EdgeCase
+--- PASS: TestCaseLevelExceptionEscalation_EdgeCase (0.00s)
+=== RUN   TestCaseLevelExceptionEscalation_FailureMode
+--- PASS: TestCaseLevelExceptionEscalation_FailureMode (0.00s)
+=== RUN   TestResolveRetryPolicy_HappyPath
+--- PASS: TestResolveRetryPolicy_HappyPath (0.00s)
+=== RUN   TestResolveRetryPolicy_EdgeCase
+--- PASS: TestResolveRetryPolicy_EdgeCase (0.00s)
+=== RUN   TestResolveRetryPolicy_FailureMode
+    classifier_test.go:327: 
+        	Error Trace:	C:/MyProjects/MyLoanOriginationWorkflowApp/workflow-engine-go/internal/exception/classifier_test.go:327
+        	Error:      	Not equal: 
+        	            	expected: 0
+        	            	actual  : 3
+        	Test:       	TestResolveRetryPolicy_FailureMode
+--- FAIL: TestResolveRetryPolicy_FailureMode (0.00s)
+=== RUN   TestBuildTaskErrorDetail_ContextPropagation
+--- PASS: TestBuildTaskErrorDetail_ContextPropagation (0.00s)
+=== RUN   TestHandleTaskFailure_FailureModeValidation
+--- PASS: TestHandleTaskFailure_FailureModeValidation (0.00s)
+=== RUN   TestSagaCompensation_HappyPath
+    compensation_test.go:67: 
+        	Error Trace:	C:/MyProjects/MyLoanOriginationWorkflowApp/workflow-engine-go/internal/exception/compensation_test.go:67
+        	Error:      	Received unexpected error:
+        	            	startCompensation: publish event: PublishEvent: ExecQuery '
+        	            			INSERT INTO events_outbox (
+        	            				tenant_id,
+        	            				case_id,
+        	            				task_id,
+        	            				event_type,
+        	            				payload,
+        	            				status,
+        	            				target_service,
+        	            				max_attempts,
+        	            				partition_key,
+        	            				trace_id
+        	            			) VALUES (
+        	            				$1::uuid,
+        	            				$2::uuid,
+        	            				$3::uuid,
+        	            				$4,
+        	            				$5::jsonb,
+        	            				$6,
+        	            				$7,
+        	            				$8,
+        	            				$9,
+        	            				$10
+        	            			)
+        	            		', arguments do not match: argument 2 expected [string - task-1] does not match actual [string - comp-task-1]
+        	Test:       	TestSagaCompensation_HappyPath
+    compensation_test.go:70: 
+        	Error Trace:	C:/MyProjects/MyLoanOriginationWorkflowApp/workflow-engine-go/internal/exception/compensation_test.go:70
+        	Error:      	Received unexpected error:
+        	            	call to Commit transaction, was not expected, next expectation is: ExpectedExec => expecting Exec or ExecContext which:
+        	            	  - matches sql: '(?s)INSERT INTO events_outbox'
+        	            	  - is with arguments:
+        	            	    0 - {}
+        	            	    1 - case-1
+        	            	    2 - task-1
+        	            	    3 - COMPENSATION_STARTED
+        	            	    4 - {}
+        	            	    5 - PENDING
+        	            	    6 - case-orchestrator
+        	            	    7 - 5
+        	            	    8 - {}
+        	            	    9 - {}
+        	            	  - should return Result having:
+        	            	      LastInsertId: 0
+        	            	      RowsAffected: 1
+        	Test:       	TestSagaCompensation_HappyPath
+    compensation_test.go:71: 
+        	Error Trace:	C:/MyProjects/MyLoanOriginationWorkflowApp/workflow-engine-go/internal/exception/compensation_test.go:71
+        	Error:      	Received unexpected error:
+        	            	there is a remaining expectation which was not matched: ExpectedExec => expecting Exec or ExecContext which:
+        	            	  - matches sql: '(?s)INSERT INTO events_outbox'
+        	            	  - is with arguments:
+        	            	    0 - {}
+        	            	    1 - case-1
+        	            	    2 - task-1
+        	            	    3 - COMPENSATION_STARTED
+        	            	    4 - {}
+        	            	    5 - PENDING
+        	            	    6 - case-orchestrator
+        	            	    7 - 5
+        	            	    8 - {}
+        	            	    9 - {}
+        	            	  - should return Result having:
+        	            	      LastInsertId: 0
+        	            	      RowsAffected: 1
+        	Test:       	TestSagaCompensation_HappyPath
+--- FAIL: TestSagaCompensation_HappyPath (0.00s)
+=== RUN   TestSagaCompensation_EdgeCase
+    compensation_test.go:109: 
+        	Error Trace:	C:/MyProjects/MyLoanOriginationWorkflowApp/workflow-engine-go/internal/exception/compensation_test.go:109
+        	Error:      	Received unexpected error:
+        	            	startCompensation: publish event: PublishEvent: ExecQuery '
+        	            			INSERT INTO events_outbox (
+        	            				tenant_id,
+        	            				case_id,
+        	            				task_id,
+        	            				event_type,
+        	            				payload,
+        	            				status,
+        	            				target_service,
+        	            				max_attempts,
+        	            				partition_key,
+        	            				trace_id
+        	            			) VALUES (
+        	            				$1::uuid,
+        	            				$2::uuid,
+        	            				$3::uuid,
+        	            				$4,
+        	            				$5::jsonb,
+        	            				$6,
+        	            				$7,
+        	            				$8,
+        	            				$9,
+        	            				$10
+        	            			)
+        	            		', arguments do not match: argument 2 expected [string - task-edge] does not match actual [string - comp-task-edge]
+        	Test:       	TestSagaCompensation_EdgeCase
+    compensation_test.go:112: 
+        	Error Trace:	C:/MyProjects/MyLoanOriginationWorkflowApp/workflow-engine-go/internal/exception/compensation_test.go:112
+        	Error:      	Received unexpected error:
+        	            	call to Commit transaction, was not expected, next expectation is: ExpectedExec => expecting Exec or ExecContext which:
+        	            	  - matches sql: '(?s)INSERT INTO events_outbox'
+        	            	  - is with arguments:
+        	            	    0 - {}
+        	            	    1 - case-edge
+        	            	    2 - task-edge
+        	            	    3 - COMPENSATION_STARTED
+        	            	    4 - {}
+        	            	    5 - PENDING
+        	            	    6 - case-orchestrator
+        	            	    7 - 5
+        	            	    8 - {}
+        	            	    9 - {}
+        	            	  - should return Result having:
+        	            	      LastInsertId: 0
+        	            	      RowsAffected: 1
+        	Test:       	TestSagaCompensation_EdgeCase
+    compensation_test.go:113: 
+        	Error Trace:	C:/MyProjects/MyLoanOriginationWorkflowApp/workflow-engine-go/internal/exception/compensation_test.go:113
+        	Error:      	Received unexpected error:
+        	            	there is a remaining expectation which was not matched: ExpectedExec => expecting Exec or ExecContext which:
+        	            	  - matches sql: '(?s)INSERT INTO events_outbox'
+        	            	  - is with arguments:
+        	            	    0 - {}
+        	            	    1 - case-edge
+        	            	    2 - task-edge
+        	            	    3 - COMPENSATION_STARTED
+        	            	    4 - {}
+        	            	    5 - PENDING
+        	            	    6 - case-orchestrator
+        	            	    7 - 5
+        	            	    8 - {}
+        	            	    9 - {}
+        	            	  - should return Result having:
+        	            	      LastInsertId: 0
+        	            	      RowsAffected: 1
+        	Test:       	TestSagaCompensation_EdgeCase
+--- FAIL: TestSagaCompensation_EdgeCase (0.00s)
+=== RUN   TestSagaCompensation_FailureMode
+--- PASS: TestSagaCompensation_FailureMode (0.00s)
+=== RUN   TestOperatorExceptionDashboardSupport_HappyPath
+--- PASS: TestOperatorExceptionDashboardSupport_HappyPath (0.00s)
+=== RUN   TestOperatorExceptionDashboardSupport_EdgeCase
+--- PASS: TestOperatorExceptionDashboardSupport_EdgeCase (0.00s)
+=== RUN   TestOperatorExceptionDashboardSupport_FailureMode
+--- PASS: TestOperatorExceptionDashboardSupport_FailureMode (0.00s)
+=== RUN   TestDeadLetterQueue_HappyPath
+2026/02/20 22:49:48 WARN DLQ entry requeued dlq_id=dlq-1 task_id=task-1 operator_id=operator-1
+--- PASS: TestDeadLetterQueue_HappyPath (0.00s)
+=== RUN   TestDeadLetterQueue_EdgeCase
+2026/02/20 22:49:48 WARN DLQ entry requeued dlq_id=dlq-2 task_id=task-2 operator_id=operator-2
+--- PASS: TestDeadLetterQueue_EdgeCase (0.00s)
+=== RUN   TestDeadLetterQueue_FailureMode
+--- PASS: TestDeadLetterQueue_FailureMode (0.00s)
+FAIL
+FAIL	workflow-engine/internal/exception	0.234s
+FAIL

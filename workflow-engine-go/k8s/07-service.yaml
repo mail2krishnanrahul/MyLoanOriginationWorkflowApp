@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: workflow-engine
+  namespace: workflow-engine
+  labels:
+    app: workflow-engine
+spec:
+  selector:
+    app: workflow-engine
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
+  type: ClusterIP

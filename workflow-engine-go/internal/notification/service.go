@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"workflow-engine/internal/approval"
+	"workflow-engine/internal/multitenancy"
 	"workflow-engine/pkg/model"
 
 	"github.com/jmoiron/sqlx"
@@ -221,6 +222,9 @@ func (s *NotificationService) HandleEvent(ctx context.Context, event model.Event
 		notificationID, err := s.insertNotificationQueue(ctx, tx, trigger, event.CaseID, event.TaskID, recipient, subject, body, scheduledAt, errorDetail)
 		if err != nil {
 			return fmt.Errorf("HandleEvent: queue insert for trigger %s: %w", trigger.TriggerCode, err)
+		}
+		if tenantID, tenantErr := multitenancy.TenantFromContext(ctx); tenantErr == nil {
+			multitenancy.IncNotificationsQueued(tenantID, strings.ToUpper(strings.TrimSpace(trigger.Channel)))
 		}
 
 		if err := appendDeliveryEvent(ctx, tx, notificationID, model.NotificationDeliveryEventQueued, json.RawMessage(`{"state":"queued"}`), nil); err != nil {

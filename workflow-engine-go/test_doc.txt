@@ -1,0 +1,147 @@
+=== RUN   TestApplyAggregationRules
+=== RUN   TestApplyAggregationRules/happy_path_updates_metadata
+=== RUN   TestApplyAggregationRules/edge_nested_path_not_existing_yet
+=== RUN   TestApplyAggregationRules/failure_source_field_missing
+--- PASS: TestApplyAggregationRules (0.00s)
+    --- PASS: TestApplyAggregationRules/happy_path_updates_metadata (0.00s)
+    --- PASS: TestApplyAggregationRules/edge_nested_path_not_existing_yet (0.00s)
+    --- PASS: TestApplyAggregationRules/failure_source_field_missing (0.00s)
+=== RUN   TestResolveTaskInputs
+=== RUN   TestResolveTaskInputs/all_dependencies_satisfied
+=== RUN   TestResolveTaskInputs/required_dependency_field_missing
+=== RUN   TestResolveTaskInputs/optional_dependency_missing_succeeds
+=== RUN   TestResolveTaskInputs/source_task_not_completed_blocks
+=== RUN   TestResolveTaskInputs/latest_completed_source_task_used
+--- PASS: TestResolveTaskInputs (0.00s)
+    --- PASS: TestResolveTaskInputs/all_dependencies_satisfied (0.00s)
+    --- PASS: TestResolveTaskInputs/required_dependency_field_missing (0.00s)
+    --- PASS: TestResolveTaskInputs/optional_dependency_missing_succeeds (0.00s)
+    --- PASS: TestResolveTaskInputs/source_task_not_completed_blocks (0.00s)
+    --- PASS: TestResolveTaskInputs/latest_completed_source_task_used (0.00s)
+=== RUN   TestRedactSensitiveData
+=== RUN   TestRedactSensitiveData/authorized_user_no_redaction
+=== RUN   TestRedactSensitiveData/unauthorized_user_redaction_applied
+=== RUN   TestRedactSensitiveData/nested_field_special_character_mask
+--- PASS: TestRedactSensitiveData (0.00s)
+    --- PASS: TestRedactSensitiveData/authorized_user_no_redaction (0.00s)
+    --- PASS: TestRedactSensitiveData/unauthorized_user_redaction_applied (0.00s)
+    --- PASS: TestRedactSensitiveData/nested_field_special_character_mask (0.00s)
+=== RUN   TestDocumentRetentionJobRun
+=== RUN   TestDocumentRetentionJobRun/happy_path_archive_and_delete
+2026/02/20 22:40:02 ERROR document archive failed document_id=doc-archive error="archiveOne: publish DOCUMENT_ARCHIVED: PublishEvent: enqueue webhook deliveries: EnqueueWebhookDeliveries: insert queue rows: ExecQuery: could not match actual sql: \"INSERT INTO webhook_delivery_queue ( subscription_id, tenant_id, event_type, payload, status, attempts, max_attempts, scheduled_at ) SELECT subscription_id, tenant_id, $2, $3::jsonb, 'PENDING', 0, max_failures, now() FROM webhook_subscriptions WHERE tenant_id = $1::uuid AND status = 'ACTIVE' AND ( COALESCE(array_length(event_types, 1), 0) = 0 OR $2 = ANY(event_types) )\" with expected regexp \"UPDATE case_documents\""
+2026/02/20 22:40:02 ERROR document delete failed document_id=doc-delete error="deleteOne: publish DOCUMENT_DELETED: PublishEvent: enqueue webhook deliveries: EnqueueWebhookDeliveries: insert queue rows: call to ExecQuery '\n\t\tINSERT INTO webhook_delivery_queue (\n\t\t\tsubscription_id,\n\t\t\ttenant_id,\n\t\t\tevent_type,\n\t\t\tpayload,\n\t\t\tstatus,\n\t\t\tattempts,\n\t\t\tmax_attempts,\n\t\t\tscheduled_at\n\t\t)\n\t\tSELECT\n\t\t\tsubscription_id,\n\t\t\ttenant_id,\n\t\t\t$2,\n\t\t\t$3::jsonb,\n\t\t\t'PENDING',\n\t\t\t0,\n\t\t\tmax_failures,\n\t\t\tnow()\n\t\tFROM webhook_subscriptions\n\t\tWHERE tenant_id = $1::uuid\n\t\t  AND status = 'ACTIVE'\n\t\t  AND (\n\t\t\tCOALESCE(array_length(event_types, 1), 0) = 0\n\t\t\tOR $2 = ANY(event_types)\n\t\t  )\n\t' with args [{Name: Ordinal:1 Value:00000000-0000-0000-0000-000000000000} {Name: Ordinal:2 Value:DOCUMENT_DELETED} {Name: Ordinal:3 Value:[123 34 97 99 116 105 111 110 34 58 34 68 69 76 69 84 69 34 44 34 99 97 115 101 95 105 100 34 58 34 99 97 115 101 45 49 34 44 34 100 111 99 117 109 101 110 116 95 105 100 34 58 34 100 111 99 45 100 101 108 101 116 101 34 44 34 100 111 99 117 109 101 110 116 95 116 121 112 101 95 99 111 100 101 34 58 34 73 68 95 68 79 67 85 77 69 78 84 34 44 34 116 101 110 97 110 116 95 105 100 34 58 34 48 48 48 48 48 48 48 48 45 48 48 48 48 45 48 48 48 48 45 48 48 48 48 45 48 48 48 48 48 48 48 48 48 48 48 48 34 125]}], was not expected, next expectation is: ExpectedCommit => expecting transaction Commit"
+2026/02/20 22:40:02 INFO document retention sweep complete checked=2 archived=0 deleted=0 batch_size=100
+=== RUN   TestDocumentRetentionJobRun/edge_legal_hold_rows_excluded
+2026/02/20 22:40:02 INFO document retention sweep complete checked=0 archived=0 deleted=0 batch_size=100
+=== RUN   TestDocumentRetentionJobRun/failure_storage_delete_error_continues_batch
+2026/02/20 22:40:02 ERROR document delete failed document_id=doc-delete error="deleteOne: delete storage object: delete failed"
+2026/02/20 22:40:02 INFO document retention sweep complete checked=1 archived=0 deleted=0 batch_size=100
+--- PASS: TestDocumentRetentionJobRun (0.00s)
+    --- PASS: TestDocumentRetentionJobRun/happy_path_archive_and_delete (0.00s)
+    --- PASS: TestDocumentRetentionJobRun/edge_legal_hold_rows_excluded (0.00s)
+    --- PASS: TestDocumentRetentionJobRun/failure_storage_delete_error_continues_batch (0.00s)
+=== RUN   TestEnforceDocumentRetention
+=== RUN   TestEnforceDocumentRetention/happy_path
+=== RUN   TestEnforceDocumentRetention/edge_zero_candidates
+=== RUN   TestEnforceDocumentRetention/failure_query_error
+--- PASS: TestEnforceDocumentRetention (0.00s)
+    --- PASS: TestEnforceDocumentRetention/happy_path (0.00s)
+    --- PASS: TestEnforceDocumentRetention/edge_zero_candidates (0.00s)
+    --- PASS: TestEnforceDocumentRetention/failure_query_error (0.00s)
+=== RUN   TestValidateTaskInput
+=== RUN   TestValidateTaskInput/valid_payload_passes
+=== RUN   TestValidateTaskInput/missing_required_field_fails
+=== RUN   TestValidateTaskInput/type_mismatch_fails
+=== RUN   TestValidateTaskInput/enum_violation_fails
+=== RUN   TestValidateTaskInput/pattern_violation_fails
+=== RUN   TestValidateTaskInput/nested_object_validation_fails
+--- PASS: TestValidateTaskInput (0.00s)
+    --- PASS: TestValidateTaskInput/valid_payload_passes (0.00s)
+    --- PASS: TestValidateTaskInput/missing_required_field_fails (0.00s)
+    --- PASS: TestValidateTaskInput/type_mismatch_fails (0.00s)
+    --- PASS: TestValidateTaskInput/enum_violation_fails (0.00s)
+    --- PASS: TestValidateTaskInput/pattern_violation_fails (0.00s)
+    --- PASS: TestValidateTaskInput/nested_object_validation_fails (0.00s)
+=== RUN   TestValidateTaskOutput
+=== RUN   TestValidateTaskOutput/valid_output
+=== RUN   TestValidateTaskOutput/missing_credit_score
+=== RUN   TestValidateTaskOutput/score_out_of_range
+--- PASS: TestValidateTaskOutput (0.00s)
+    --- PASS: TestValidateTaskOutput/valid_output (0.00s)
+    --- PASS: TestValidateTaskOutput/missing_credit_score (0.00s)
+    --- PASS: TestValidateTaskOutput/score_out_of_range (0.00s)
+=== RUN   TestUploadDocument
+=== RUN   TestUploadDocument/happy_path_upload
+=== RUN   TestUploadDocument/edge_upload_exceeds_max_size
+=== RUN   TestUploadDocument/failure_storage_upload_timeout
+--- PASS: TestUploadDocument (0.02s)
+    --- PASS: TestUploadDocument/happy_path_upload (0.01s)
+    --- PASS: TestUploadDocument/edge_upload_exceeds_max_size (0.00s)
+    --- PASS: TestUploadDocument/failure_storage_upload_timeout (0.00s)
+=== RUN   TestApproveDocument
+=== RUN   TestApproveDocument/happy_path_approve
+=== RUN   TestApproveDocument/edge_already_verified
+=== RUN   TestApproveDocument/failure_update_error
+--- PASS: TestApproveDocument (0.00s)
+    --- PASS: TestApproveDocument/happy_path_approve (0.00s)
+    --- PASS: TestApproveDocument/edge_already_verified (0.00s)
+    --- PASS: TestApproveDocument/failure_update_error (0.00s)
+=== RUN   TestRejectDocument
+=== RUN   TestRejectDocument/happy_path_reject
+=== RUN   TestRejectDocument/edge_reject_archived_document_blocked
+=== RUN   TestRejectDocument/failure_update_mapping_error
+--- PASS: TestRejectDocument (0.00s)
+    --- PASS: TestRejectDocument/happy_path_reject (0.00s)
+    --- PASS: TestRejectDocument/edge_reject_archived_document_blocked (0.00s)
+    --- PASS: TestRejectDocument/failure_update_mapping_error (0.00s)
+=== RUN   TestCheckDocumentRequirements
+=== RUN   TestCheckDocumentRequirements/happy_all_fulfilled
+=== RUN   TestCheckDocumentRequirements/edge_missing_required_docs
+=== RUN   TestCheckDocumentRequirements/failure_query_error
+--- PASS: TestCheckDocumentRequirements (0.00s)
+    --- PASS: TestCheckDocumentRequirements/happy_all_fulfilled (0.00s)
+    --- PASS: TestCheckDocumentRequirements/edge_missing_required_docs (0.00s)
+    --- PASS: TestCheckDocumentRequirements/failure_query_error (0.00s)
+=== RUN   TestDocumentLifecycleEndToEnd
+--- PASS: TestDocumentLifecycleEndToEnd (0.01s)
+=== RUN   TestLocalStorageUploadDownloadDelete
+=== RUN   TestLocalStorageUploadDownloadDelete/happy_path_upload_and_download
+2026/02/20 22:40:02 INFO local storage upload complete path=loan-docs/case-1/doc-1.pdf bytes=16
+    storage_local_test.go:81: 
+        	Error Trace:	C:/MyProjects/MyLoanOriginationWorkflowApp/workflow-engine-go/internal/document/storage_local_test.go:81
+        	Error:      	Received unexpected error:
+        	            	delete(C:\Users\mysel\AppData\Local\Temp\TestLocalStorageUploadDownloadDeletehappy_path_upload_and_downl1465633469\001\loan-docs\case-1\doc-1.pdf): remove C:\Users\mysel\AppData\Local\Temp\TestLocalStorageUploadDownloadDeletehappy_path_upload_and_downl1465633469\001\loan-docs\case-1\doc-1.pdf: The process cannot access the file because it is being used by another process.
+        	Test:       	TestLocalStorageUploadDownloadDelete/happy_path_upload_and_download
+    storage_local_test.go:83: 
+        	Error Trace:	C:/MyProjects/MyLoanOriginationWorkflowApp/workflow-engine-go/internal/document/storage_local_test.go:83
+        	Error:      	An error is expected but got nil.
+        	Test:       	TestLocalStorageUploadDownloadDelete/happy_path_upload_and_download
+=== RUN   TestLocalStorageUploadDownloadDelete/edge_nested_key_path
+2026/02/20 22:40:02 INFO local storage upload complete path=loan-docs/nested/case-2/doc-2.png bytes=9
+    storage_local_test.go:81: 
+        	Error Trace:	C:/MyProjects/MyLoanOriginationWorkflowApp/workflow-engine-go/internal/document/storage_local_test.go:81
+        	Error:      	Received unexpected error:
+        	            	delete(C:\Users\mysel\AppData\Local\Temp\TestLocalStorageUploadDownloadDeleteedge_nested_key_path3350946828\001\loan-docs\nested\case-2\doc-2.png): remove C:\Users\mysel\AppData\Local\Temp\TestLocalStorageUploadDownloadDeleteedge_nested_key_path3350946828\001\loan-docs\nested\case-2\doc-2.png: The process cannot access the file because it is being used by another process.
+        	Test:       	TestLocalStorageUploadDownloadDelete/edge_nested_key_path
+    storage_local_test.go:83: 
+        	Error Trace:	C:/MyProjects/MyLoanOriginationWorkflowApp/workflow-engine-go/internal/document/storage_local_test.go:83
+        	Error:      	An error is expected but got nil.
+        	Test:       	TestLocalStorageUploadDownloadDelete/edge_nested_key_path
+=== RUN   TestLocalStorageUploadDownloadDelete/failure_canceled_context
+--- FAIL: TestLocalStorageUploadDownloadDelete (0.02s)
+    --- FAIL: TestLocalStorageUploadDownloadDelete/happy_path_upload_and_download (0.01s)
+    --- FAIL: TestLocalStorageUploadDownloadDelete/edge_nested_key_path (0.01s)
+    --- PASS: TestLocalStorageUploadDownloadDelete/failure_canceled_context (0.00s)
+=== RUN   TestS3Storage
+=== RUN   TestS3Storage/happy_path_upload_download_delete_presign
+2026/02/20 22:40:02 INFO s3 upload complete path=bucket-a/case-1/doc.pdf bytes=7
+2026/02/20 22:40:02 INFO s3 object deleted path=bucket-a/case-1/doc.pdf
+=== RUN   TestS3Storage/failure_upload_transient_error
+=== RUN   TestS3Storage/failure_invalid_storage_path_for_delete
+--- PASS: TestS3Storage (0.00s)
+    --- PASS: TestS3Storage/happy_path_upload_download_delete_presign (0.00s)
+    --- PASS: TestS3Storage/failure_upload_transient_error (0.00s)
+    --- PASS: TestS3Storage/failure_invalid_storage_path_for_delete (0.00s)
+FAIL
+FAIL	workflow-engine/internal/document	0.291s
+FAIL

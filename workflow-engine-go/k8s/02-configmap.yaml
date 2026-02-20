@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: workflow-engine-config
+  namespace: workflow-engine
+data:
+  WORKER_COUNT: "10"
+  LOG_LEVEL: "INFO"

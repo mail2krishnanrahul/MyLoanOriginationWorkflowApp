@@ -1,0 +1,14 @@
+groups:
+  - name: tenant-capacity
+    interval: 30s
+    rules:
+      - record: tenant:max_active_cases_config
+        expr: tenant_max_active_cases_config
+      - alert: TenantActiveCasesExceeded
+        expr: tenant_active_cases > tenant:max_active_cases_config
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Tenant active cases exceeded configured maximum"
+          description: "tenant_id={{ $labels.tenant_id }} has active case volume above configured max_active_cases."

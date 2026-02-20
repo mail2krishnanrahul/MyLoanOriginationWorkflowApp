@@ -3,10 +3,14 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
+	"workflow-engine/internal/document"
+	"workflow-engine/internal/exception"
+	"workflow-engine/internal/multitenancy"
 	"workflow-engine/internal/repository"
 	"workflow-engine/internal/sla"
 	"workflow-engine/pkg/model"
@@ -39,9 +43,12 @@ func NewCaseOrchestratorService(repo *repository.Repository) *CaseOrchestratorSe
 // HandleEvent is the central event dispatcher. It inspects the event type
 // and delegates to the appropriate handler.
 func (o *CaseOrchestratorService) HandleEvent(ctx context.Context, event model.Event) error {
+	ctx = multitenancy.EnsureTenantContextForEvent(ctx, event)
+	tenantID, _ := multitenancy.TenantFromContext(ctx)
 	slog.Info("handling event",
 		"event_id", event.ID,
 		"event_type", event.EventType,
+		"tenant_id", tenantID,
 		"case_id", event.CaseID,
 		"task_id", event.TaskID)
 
@@ -50,10 +57,16 @@ func (o *CaseOrchestratorService) HandleEvent(ctx context.Context, event model.E
 		return o.onTaskCompleted(ctx, event)
 	case model.EventTaskFailed:
 		return o.onTaskFailed(ctx, event)
+	case model.EventTaskRequeued:
+		return o.onTaskRequeued(ctx, event)
 	case model.EventActivityCompleted:
 		return o.onActivityCompleted(ctx, event)
 	case model.EventCaseStageChanged:
 		return o.onCaseStageChanged(ctx, event)
+	case model.EventCaseExceptionRaised, model.EventCaseExceptionPropagated:
+		return o.onCaseExceptionEvent(ctx, event)
+	case model.EventCompensationStarted, model.EventCompensationCompleted, model.EventCompensationFailed:
+		return o.onCompensationEvent(ctx, event)
 	case model.EventSLAWarning, model.EventSLACritical, model.EventSLABreached:
 		return o.onSLAThresholdEvent(ctx, event)
 	case model.EventSLAPaused, model.EventSLAResumed, model.EventSLAReset, model.EventSLAExtended:
@@ -72,6 +85,8 @@ func (o *CaseOrchestratorService) HandleEvent(ctx context.Context, event model.E
 		model.EventCaseRejected,
 		model.EventCaseMaxReworkExceeded:
 		return o.onApprovalCaseEvent(ctx, event)
+	case model.EventTenantConfigUpdated:
+		return o.onTenantConfigUpdated(ctx, event)
 	default:
 		slog.Warn("unhandled event type", "event_type", event.EventType)
 		return nil
@@ -88,6 +103,27 @@ func (o *CaseOrchestratorService) onTaskCompleted(ctx context.Context, event mod
 	caseID, stageCode, activityCode, err := extractTaskContext(event.Payload)
 	if err != nil {
 		return fmt.Errorf("onTaskCompleted: %w", err)
+	}
+	taskID := ""
+	if event.TaskID != nil {
+		taskID = *event.TaskID
+	}
+	if taskID == "" {
+		var payload map[string]interface{}
+		if parseErr := json.Unmarshal(event.Payload, &payload); parseErr == nil {
+			if v, ok := payload["task_id"].(string); ok {
+				taskID = v
+			}
+		}
+	}
+
+	if taskID != "" {
+		if err := o.applyAggregationRulesForTask(ctx, caseID, taskID); err != nil {
+			return fmt.Errorf("onTaskCompleted: apply aggregation rules: %w", err)
+		}
+		if err := o.syncCompensationForTask(ctx, taskID, model.TaskStatusDone); err != nil {
+			return fmt.Errorf("onTaskCompleted: sync compensation status: %w", err)
+		}
 	}
 
 	slog.Info("TASK_COMPLETED", "case_id", caseID, "stage", stageCode, "activity", activityCode)
@@ -149,6 +185,12 @@ func (o *CaseOrchestratorService) onTaskFailed(ctx context.Context, event model.
 		taskID = *event.TaskID
 	}
 
+	if taskID != "" {
+		if err := o.syncCompensationForTask(ctx, taskID, model.TaskStatusFailed); err != nil {
+			return fmt.Errorf("onTaskFailed: sync compensation status: %w", err)
+		}
+	}
+
 	var payload map[string]interface{}
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {
 		return fmt.Errorf("onTaskFailed: failed to parse payload: %w", err)
@@ -208,6 +250,34 @@ func (o *CaseOrchestratorService) onTaskFailed(ctx context.Context, event model.
 	}
 
 	slog.Debug("TASK_FAILED will retry", "task_id", taskID)
+	return nil
+}
+
+func (o *CaseOrchestratorService) onTaskRequeued(ctx context.Context, event model.Event) error {
+	_ = ctx
+	if event.TaskID != nil {
+		slog.Info("TASK_REQUEUED received", "task_id", *event.TaskID, "case_id", event.CaseID)
+	}
+	return nil
+}
+
+func (o *CaseOrchestratorService) onCaseExceptionEvent(ctx context.Context, event model.Event) error {
+	_ = ctx
+	caseID := ""
+	if event.CaseID != nil {
+		caseID = *event.CaseID
+	}
+	slog.Warn("case exception event received", "event_type", event.EventType, "case_id", caseID)
+	return nil
+}
+
+func (o *CaseOrchestratorService) onCompensationEvent(ctx context.Context, event model.Event) error {
+	_ = ctx
+	taskID := ""
+	if event.TaskID != nil {
+		taskID = *event.TaskID
+	}
+	slog.Info("compensation event received", "event_type", event.EventType, "task_id", taskID, "case_id", event.CaseID)
 	return nil
 }
 
@@ -375,6 +445,17 @@ func (o *CaseOrchestratorService) onSLAThresholdEvent(ctx context.Context, event
 		"case_id", caseID,
 		"entity_type", entityType,
 		"entity_id", entityID)
+	if event.EventType == model.EventSLABreached {
+		tenantID, _ := multitenancy.TenantFromContext(ctx)
+		if tenantID == "" {
+			tenantID = event.TenantID
+		}
+		caseTypeCode := strFromMap(payload, "case_type_code")
+		if caseTypeCode == "" {
+			caseTypeCode = "UNKNOWN"
+		}
+		multitenancy.IncSLABreached(tenantID, caseTypeCode)
+	}
 
 	// Threshold events are side-effect driven in the SLA service. The orchestrator
 	// records auditable visibility and leaves domain state untouched here.
@@ -490,6 +571,14 @@ func (o *CaseOrchestratorService) onApprovalEvent(ctx context.Context, event mod
 	return tx.Commit(ctx)
 }
 
+func (o *CaseOrchestratorService) onTenantConfigUpdated(ctx context.Context, event model.Event) error {
+	if err := multitenancy.HandleTenantConfigUpdatedEvent(ctx, event.Payload); err != nil {
+		return fmt.Errorf("onTenantConfigUpdated: %w", err)
+	}
+	slog.Info("tenant feature cache invalidated from TENANT_CONFIG_UPDATED event")
+	return nil
+}
+
 func (o *CaseOrchestratorService) onApprovalCaseEvent(ctx context.Context, event model.Event) error {
 	var payload map[string]interface{}
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {
@@ -563,6 +652,7 @@ func CreateTasksForStage(
 	caseTypeConfig model.CaseTypeConfig,
 ) (int, error) {
 	count := 0
+	validator := document.DefaultSchemaValidator()
 	caseMetadata, err := loadCaseMetadataForApproval(ctx, tx, caseID)
 	if err != nil {
 		return count, fmt.Errorf("failed to load case metadata for approvals: %w", err)
@@ -573,7 +663,53 @@ func CreateTasksForStage(
 			idempotencyKey := fmt.Sprintf("%s:%s:%s:%s",
 				caseID, stageCode, activity.Code, taskDef.Code)
 
-			inputPayload, _ := json.Marshal(taskDef.Config)
+			resolvedInputs := map[string]interface{}{}
+			if len(taskDef.Config) > 0 {
+				if err := json.Unmarshal(taskDef.Config, &resolvedInputs); err != nil {
+					return count, fmt.Errorf("failed to parse default input config for task %s: %w", taskDef.Code, err)
+				}
+			}
+
+			if len(taskDef.Inputs) > 0 {
+				if repo.SQLX == nil {
+					return count, fmt.Errorf("sqlx db is not configured for dependency resolution on task %s", taskDef.Code)
+				}
+				resolvedInputs, err = document.ResolveTaskInputs(ctx, repo.SQLX, caseID, taskDef)
+				if err != nil {
+					var dependencyErr *document.DependencyError
+					if errors.As(err, &dependencyErr) {
+						reason := dependencyErr.Error()
+						blockPayload, _ := json.Marshal(map[string]interface{}{
+							"case_id":               caseID,
+							"stage_code":            stageCode,
+							"activity_code":         activity.Code,
+							"task_definition_code":  taskDef.Code,
+							"reason":                reason,
+						})
+						if publishErr := repo.PublishEvent(ctx, tx, model.Event{
+							CaseID:        &caseID,
+							EventType:     model.EventTaskCreationBlocked,
+							Payload:       blockPayload,
+							Status:        model.EventStatusPending,
+							TargetService: "case-orchestrator",
+						}); publishErr != nil {
+							return count, fmt.Errorf("failed to publish TASK_CREATION_BLOCKED for %s: %w", taskDef.Code, publishErr)
+						}
+						slog.Warn("task creation blocked due to unmet dependency", "task_definition_code", taskDef.Code, "reason", reason)
+						continue
+					}
+					return count, fmt.Errorf("failed to resolve task inputs for %s: %w", taskDef.Code, err)
+				}
+			}
+
+			if err := document.ValidateTaskInput(ctx, validator, taskDef, resolvedInputs); err != nil {
+				return count, fmt.Errorf("input schema validation failed for task %s: %w", taskDef.Code, err)
+			}
+
+			inputPayload, err := json.Marshal(resolvedInputs)
+			if err != nil {
+				return count, fmt.Errorf("failed to marshal resolved input payload for task %s: %w", taskDef.Code, err)
+			}
 			if inputPayload == nil {
 				inputPayload = json.RawMessage("{}")
 			}
@@ -583,9 +719,10 @@ func CreateTasksForStage(
 				TaskDefinitionCode: taskDef.Code,
 				ActivityCode:       activity.Code,
 				StageCode:          stageCode,
+				IsDocumentVerification: taskDef.IsDocumentVerification,
 				Status:             model.TaskStatusPending,
 				Priority:           model.TaskPriorityNormal,
-				MaxRetries:         3,
+				MaxRetries:         exception.ResolveRetryPolicy(taskDef).MaxRetries,
 				InputPayload:       inputPayload,
 				IdempotencyKey:     idempotencyKey,
 			}
@@ -658,6 +795,77 @@ func CreateTasksForStage(
 	}
 
 	return count, nil
+}
+
+func (o *CaseOrchestratorService) applyAggregationRulesForTask(ctx context.Context, caseID string, taskID string) error {
+	if o.Repo == nil || o.Repo.SQLX == nil {
+		return nil
+	}
+
+	tx, err := o.Repo.SQLX.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("applyAggregationRulesForTask: begin tx: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	var task model.Task
+	if err := tx.QueryRowxContext(ctx, `
+		SELECT
+			id::text AS id,
+			case_id::text AS case_id,
+			task_definition_code,
+			input_payload,
+			output_payload
+		FROM tasks
+		WHERE id = $1::uuid
+	`, taskID).StructScan(&task); err != nil {
+		return fmt.Errorf("applyAggregationRulesForTask: load task %s: %w", taskID, err)
+	}
+
+	var caseTypeID string
+	if err := tx.QueryRowContext(ctx, `
+		SELECT case_type_id::text
+		FROM cases
+		WHERE id = $1::uuid
+	`, caseID).Scan(&caseTypeID); err != nil {
+		return fmt.Errorf("applyAggregationRulesForTask: load case_type_id for case %s: %w", caseID, err)
+	}
+
+	config, err := o.Repo.GetCaseTypeConfig(ctx, caseTypeID)
+	if err != nil {
+		return fmt.Errorf("applyAggregationRulesForTask: load case type config: %w", err)
+	}
+	if config == nil || len(config.AggregationRules) == 0 {
+		return tx.Commit()
+	}
+
+	if err := document.ApplyAggregationRules(ctx, tx, caseID, task, config.AggregationRules); err != nil {
+		return fmt.Errorf("applyAggregationRulesForTask: apply rules: %w", err)
+	}
+	return tx.Commit()
+}
+
+func (o *CaseOrchestratorService) syncCompensationForTask(ctx context.Context, taskID string, status model.TaskStatus) error {
+	if o.Repo == nil || o.Repo.SQLX == nil {
+		return nil
+	}
+	tx, err := o.Repo.SQLX.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("syncCompensationForTask: begin tx: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if err := exception.SyncCompensationStateForTask(ctx, tx, taskID, status); err != nil {
+		return fmt.Errorf("syncCompensationForTask: sync state: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("syncCompensationForTask: commit: %w", err)
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------

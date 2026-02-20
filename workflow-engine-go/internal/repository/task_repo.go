@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"workflow-engine/internal/approval"
+	"workflow-engine/internal/document"
 	"workflow-engine/internal/sla"
+	"workflow-engine/internal/versioning"
 	"workflow-engine/pkg/model"
 
 	"github.com/jackc/pgx/v5"
@@ -130,6 +132,11 @@ func (r *Repository) UpdateTaskStatus(
 	var currentStatus string
 	var currentVersion int
 	var caseID string
+	var taskDefinitionCode string
+	var stageCode string
+	var activityCode string
+	var retryCount int
+	var maxRetries int
 	var requiresApproval bool
 	var approvalGateID *string
 	var effectiveStart time.Time
@@ -139,6 +146,11 @@ func (r *Repository) UpdateTaskStatus(
 		SELECT status,
 		       version,
 		       case_id::text,
+		       task_definition_code,
+		       stage_code,
+		       activity_code,
+		       retry_count,
+		       max_retries,
 		       requires_approval,
 		       approval_gate_id::text,
 		       COALESCE(effective_start_time, created_at) AS effective_start_time,
@@ -147,7 +159,7 @@ func (r *Repository) UpdateTaskStatus(
 		FROM tasks
 		WHERE id = $1::uuid
 		FOR UPDATE`, taskID,
-	).Scan(&currentStatus, &currentVersion, &caseID, &requiresApproval, &approvalGateID, &effectiveStart, &calendarID, &durationMS)
+	).Scan(&currentStatus, &currentVersion, &caseID, &taskDefinitionCode, &stageCode, &activityCode, &retryCount, &maxRetries, &requiresApproval, &approvalGateID, &effectiveStart, &calendarID, &durationMS)
 	if err != nil {
 		return fmt.Errorf("failed to lock task %s: %w", taskID, err)
 	}
@@ -163,6 +175,34 @@ func (r *Repository) UpdateTaskStatus(
 		}
 		if err := r.ensureApprovalGateSatisfied(ctx, tx, *approvalGateID); err != nil {
 			return fmt.Errorf("task %s completion blocked: %w", taskID, err)
+		}
+	}
+
+	if newStatus == model.TaskStatusDone && r.SQLX != nil {
+		config, err := versioning.ResolveCaseTypeConfig(ctx, r.SQLX, caseID)
+		if err != nil {
+			return fmt.Errorf("failed to load case type config for task %s: %w", taskID, err)
+		}
+		if taskDef, ok := findTaskDefinitionByCode(&config, taskDefinitionCode); ok {
+			payload := map[string]interface{}{}
+			sourcePayload := outputPayload
+			if len(sourcePayload) == 0 {
+				if err := tx.QueryRow(ctx, `
+					SELECT output_payload
+					FROM tasks
+					WHERE id = $1::uuid
+				`, taskID).Scan(&sourcePayload); err != nil {
+					return fmt.Errorf("failed to load output payload for task %s: %w", taskID, err)
+				}
+			}
+			if len(sourcePayload) > 0 {
+				if err := json.Unmarshal(sourcePayload, &payload); err != nil {
+					return fmt.Errorf("failed to parse output payload for task %s: %w", taskID, err)
+				}
+			}
+			if err := document.ValidateTaskOutput(ctx, document.DefaultSchemaValidator(), taskDef, payload); err != nil {
+				return fmt.Errorf("task %s output validation failed: %w", taskID, err)
+			}
 		}
 	}
 
@@ -325,6 +365,40 @@ func (r *Repository) UpdateTaskStatus(
 			Status:    model.EventStatusPending,
 		}); err != nil {
 			return fmt.Errorf("failed to publish SLA_PAUSED for task %s: %w", taskID, err)
+		}
+	}
+
+	if newStatus == model.TaskStatusDone || newStatus == model.TaskStatusFailed {
+		eventType := model.EventTaskCompleted
+		if newStatus == model.TaskStatusFailed {
+			eventType = model.EventTaskFailed
+		}
+		taskPayload := map[string]interface{}{
+			"case_id":              caseID,
+			"task_id":              taskID,
+			"task_definition_code": taskDefinitionCode,
+			"stage_code":           stageCode,
+			"activity_code":        activityCode,
+			"status":               string(newStatus),
+		}
+		if newStatus == model.TaskStatusFailed {
+			taskPayload["retries_exhausted"] = retryCount >= maxRetries
+			taskPayload["retry_count"] = retryCount
+			taskPayload["max_retries"] = maxRetries
+		}
+		payloadBytes, marshalErr := json.Marshal(taskPayload)
+		if marshalErr != nil {
+			return fmt.Errorf("failed to marshal task status event payload for task %s: %w", taskID, marshalErr)
+		}
+		if err := r.PublishEvent(ctx, tx, model.Event{
+			CaseID:        &caseID,
+			TaskID:        &taskID,
+			EventType:     eventType,
+			Payload:       payloadBytes,
+			Status:        model.EventStatusPending,
+			TargetService: "case-orchestrator",
+		}); err != nil {
+			return fmt.Errorf("failed to publish %s for task %s: %w", eventType, taskID, err)
 		}
 	}
 
@@ -624,4 +698,21 @@ func (r *Repository) activateApprovalGate(ctx context.Context, tx DBExecutor, ta
 	}
 
 	return nil
+}
+
+func findTaskDefinitionByCode(config *model.CaseTypeConfig, code string) (model.TaskDefinitionV2, bool) {
+	if config == nil {
+		return model.TaskDefinitionV2{}, false
+	}
+	target := strings.TrimSpace(code)
+	for _, stage := range config.Stages {
+		for _, activity := range stage.Activities {
+			for _, taskDef := range activity.TaskDefs {
+				if strings.TrimSpace(taskDef.Code) == target {
+					return taskDef, true
+				}
+			}
+		}
+	}
+	return model.TaskDefinitionV2{}, false
 }

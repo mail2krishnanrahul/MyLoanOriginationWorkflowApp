@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"workflow-engine/internal/integration"
+	"workflow-engine/internal/multitenancy"
 	"workflow-engine/pkg/model"
 )
 
@@ -29,22 +31,29 @@ func (r *Repository) PublishEvent(ctx context.Context, tx DBExecutor, event mode
 	if event.MaxAttempts == 0 {
 		event.MaxAttempts = 5
 	}
+	prepared, err := multitenancy.PrepareEventForPublish(ctx, event)
+	if err != nil {
+		return fmt.Errorf("failed to enrich event tenant payload: %w", err)
+	}
+	event = prepared
 
 	// Auto-set partition_key to case_id if not explicitly provided
 	if event.PartitionKey == nil && event.CaseID != nil {
 		event.PartitionKey = event.CaseID
 	}
 
-	_, err := tx.Exec(ctx, `
+	_, err = tx.Exec(ctx, `
 		INSERT INTO events_outbox (
-			case_id, task_id, event_type, payload,
+			tenant_id, case_id, task_id, event_type, payload,
 			status, target_service,
 			max_attempts, partition_key, trace_id
 		) VALUES (
-			$1, $2, $3, $4,
-			$5, $6,
-			$7, $8, $9
+			$1::uuid, $2, $3, $4, $5,
+			$6, $7,
+			$8, $9,
+			$10
 		)`,
+		event.TenantID,
 		event.CaseID,
 		event.TaskID,
 		string(event.EventType),
@@ -58,6 +67,9 @@ func (r *Repository) PublishEvent(ctx context.Context, tx DBExecutor, event mode
 	if err != nil {
 		return fmt.Errorf("failed to publish event: %w", err)
 	}
+	if err := integration.EnqueueWebhookDeliveriesPGX(ctx, tx, event.TenantID, event); err != nil {
+		return fmt.Errorf("failed to enqueue webhook deliveries: %w", err)
+	}
 	return nil
 }
 
@@ -67,6 +79,9 @@ func (r *Repository) PublishEvent(ctx context.Context, tx DBExecutor, event mode
 // ---------------------------------------------------------------------------
 
 func (r *Repository) PollEvents(ctx context.Context, service string, batchSize int) ([]model.Event, error) {
+	if _, err := multitenancy.TenantFromContext(ctx); err != nil {
+		ctx = multitenancy.WithTenant(ctx, multitenancy.DefaultTenantID)
+	}
 	if batchSize <= 0 {
 		batchSize = 10
 	}
@@ -77,8 +92,9 @@ func (r *Repository) PollEvents(ctx context.Context, service string, batchSize i
 	}
 	defer tx.Rollback(ctx)
 
-	rows, err := tx.Query(ctx, `
-		SELECT id, case_id, task_id, event_type, payload,
+	baseQuery := `
+		SELECT id::text AS id, case_id::text AS case_id, task_id::text AS task_id, event_type, payload,
+		       tenant_id::text AS tenant_id,
 		       status, target_service,
 		       attempts, max_attempts, last_attempted_at,
 		       partition_key, trace_id,
@@ -89,9 +105,12 @@ func (r *Repository) PollEvents(ctx context.Context, service string, batchSize i
 		  AND attempts < max_attempts
 		ORDER BY created_at ASC
 		LIMIT $2
-		FOR UPDATE SKIP LOCKED`,
-		service, batchSize,
-	)
+		FOR UPDATE SKIP LOCKED`
+	query, args, scopeErr := multitenancy.AssertTenantScope(ctx, baseQuery, []interface{}{service, batchSize})
+	if scopeErr != nil {
+		return nil, fmt.Errorf("PollEvents: %w", scopeErr)
+	}
+	rows, err := tx.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("PollEvents: query: %w", err)
 	}
@@ -103,6 +122,7 @@ func (r *Repository) PollEvents(ctx context.Context, service string, batchSize i
 		var e model.Event
 		if err := rows.Scan(
 			&e.ID, &e.CaseID, &e.TaskID, &e.EventType, &e.Payload,
+			&e.TenantID,
 			&e.Status, &e.TargetService,
 			&e.Attempts, &e.MaxAttempts, &e.LastAttemptedAt,
 			&e.PartitionKey, &e.TraceID,
@@ -122,12 +142,16 @@ func (r *Repository) PollEvents(ctx context.Context, service string, batchSize i
 	}
 
 	// Atomically claim events within the same transaction
-	_, err = tx.Exec(ctx, `
+	claimQuery, claimArgs, scopeErr := multitenancy.AssertTenantScope(ctx, `
 		UPDATE events_outbox
 		SET status = 'PROCESSING',
 		    last_attempted_at = now(),
 		    attempts = attempts + 1
-		WHERE id = ANY($1::uuid[])`, ids)
+		WHERE id = ANY($1::uuid[])`, []interface{}{ids})
+	if scopeErr != nil {
+		return nil, fmt.Errorf("PollEvents: %w", scopeErr)
+	}
+	_, err = tx.Exec(ctx, claimQuery, claimArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("PollEvents: claim events: %w", err)
 	}
@@ -144,17 +168,22 @@ func (r *Repository) PollEvents(ctx context.Context, service string, batchSize i
 // ---------------------------------------------------------------------------
 
 func (r *Repository) AckEvent(ctx context.Context, eventID string) error {
+	if _, err := multitenancy.TenantFromContext(ctx); err != nil {
+		ctx = multitenancy.WithTenant(ctx, multitenancy.DefaultTenantID)
+	}
 	now := time.Now().UTC()
-	tag, err := r.Pool.Exec(ctx, `
+	query, args, scopeErr := multitenancy.AssertTenantScope(ctx, `
 		UPDATE events_outbox
 		SET status       = 'DELIVERED',
 		    delivered_at  = $1,
 		    attempts      = attempts + 1,
 		    last_attempted_at = $1
 		WHERE id = $2::uuid
-		  AND status IN ('PENDING', 'PROCESSING')`,
-		now, eventID,
-	)
+		  AND status IN ('PENDING', 'PROCESSING')`, []interface{}{now, eventID})
+	if scopeErr != nil {
+		return fmt.Errorf("AckEvent: %w", scopeErr)
+	}
+	tag, err := r.Pool.Exec(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("failed to ack event %s: %w", eventID, err)
 	}
@@ -170,13 +199,16 @@ func (r *Repository) AckEvent(ctx context.Context, eventID string) error {
 // ---------------------------------------------------------------------------
 
 func (r *Repository) NackEvent(ctx context.Context, eventID string, deliveryErr error) error {
+	if _, err := multitenancy.TenantFromContext(ctx); err != nil {
+		ctx = multitenancy.WithTenant(ctx, multitenancy.DefaultTenantID)
+	}
 	now := time.Now().UTC()
 	errMsg := ""
 	if deliveryErr != nil {
 		errMsg = deliveryErr.Error()
 	}
 
-	tag, err := r.Pool.Exec(ctx, `
+	query, args, scopeErr := multitenancy.AssertTenantScope(ctx, `
 		UPDATE events_outbox
 		SET attempts          = attempts + 1,
 		    last_attempted_at = $1,
@@ -190,9 +222,11 @@ func (r *Repository) NackEvent(ctx context.Context, eventID string, deliveryErr 
 		                            to_jsonb($2::text)
 		                        )
 		WHERE id = $3::uuid
-		  AND status IN ('PENDING', 'PROCESSING')`,
-		now, errMsg, eventID,
-	)
+		  AND status IN ('PENDING', 'PROCESSING')`, []interface{}{now, errMsg, eventID})
+	if scopeErr != nil {
+		return fmt.Errorf("NackEvent: %w", scopeErr)
+	}
+	tag, err := r.Pool.Exec(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("failed to nack event %s: %w", eventID, err)
 	}

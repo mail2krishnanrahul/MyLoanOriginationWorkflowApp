@@ -15,9 +15,13 @@ import (
 
 	"workflow-engine/internal/approval"
 	"workflow-engine/internal/database"
+	"workflow-engine/internal/document"
 	"workflow-engine/internal/engine"
 	"workflow-engine/internal/engine/assignment"
+	"workflow-engine/internal/integration"
+	"workflow-engine/internal/multitenancy"
 	"workflow-engine/internal/notification"
+	"workflow-engine/internal/reporting"
 	"workflow-engine/internal/repository"
 	"workflow-engine/internal/sla"
 
@@ -74,6 +78,14 @@ func main() {
 	slaSweepJob := sla.NewSLASweepJob(sqlxDB, nil, 5*time.Minute, 5000, slog.Default())
 	approvalEvaluator := approval.NewApprovalPolicyEvaluator(sqlxDB, slog.Default(), nil)
 	approvalExpirySweepJob := approval.NewApprovalExpirySweepJob(sqlxDB, nil, approvalEvaluator, 1*time.Minute, 500, slog.Default())
+	tenantRateLimitCleanupJob := multitenancy.NewTenantRateLimitCleanupJob(sqlxDB, 1*time.Minute, 10000, slog.Default())
+	if ttlRaw := strings.TrimSpace(os.Getenv("TENANT_FEATURE_CACHE_TTL_SECONDS")); ttlRaw != "" {
+		if ttlSec, parseErr := strconv.Atoi(ttlRaw); parseErr == nil && ttlSec > 0 {
+			multitenancy.SetTenantFeatureCacheTTL(time.Duration(ttlSec) * time.Second)
+		}
+	}
+	multitenancy.RegisterTenantMetrics(nil)
+	integration.RegisterIntegrationMetrics(nil)
 
 	notificationRenderer := notification.NewTemplateRenderer()
 	notificationService := notification.NewNotificationService(
@@ -83,7 +95,9 @@ func main() {
 		nil,
 		slog.Default(),
 	)
-	workflowEngine.SetEventObserver(notificationService)
+	metricsRefreshJob := reporting.NewMetricsRefreshJob(sqlxDB, 5*time.Minute, 3, slog.Default())
+	reportingObserver := reporting.NewEventHintObserver(metricsRefreshJob, slog.Default())
+	workflowEngine.SetEventObserver(engine.NewMultiEventObserver(notificationService, reportingObserver))
 
 	notificationChannels := map[string]notification.NotificationChannel{
 		"IN_APP": notification.NewInAppChannel(sqlxDB, slog.Default()),
@@ -137,6 +151,24 @@ func main() {
 		nil,
 	)
 
+	documentStorageBasePath := strings.TrimSpace(os.Getenv("DOCUMENT_STORAGE_BASE_PATH"))
+	if documentStorageBasePath == "" {
+		documentStorageBasePath = "/tmp/workflow-documents"
+	}
+	documentStorage := document.NewLocalStorage(documentStorageBasePath, slog.Default())
+	documentRetentionJob := document.NewDocumentRetentionJob(
+		sqlxDB,
+		documentStorage,
+		strings.TrimSpace(os.Getenv("DOCUMENT_ARCHIVE_BUCKET")),
+		24*time.Hour,
+		10000,
+		slog.Default(),
+	)
+	webhookDispatcher := integration.NewWebhookDispatcher(sqlxDB, &http.Client{Timeout: 10 * time.Second}, 1*time.Second, slog.Default())
+	serviceHealthChecker := integration.NewServiceHealthChecker(sqlxDB, &http.Client{Timeout: 10 * time.Second}, 1*time.Minute, slog.Default())
+	idempotencyCleanupJob := integration.NewIdempotencyKeyCleanupJob(sqlxDB, 24*time.Hour, 50000, slog.Default())
+	ingestedEventKeyCleanupJob := integration.NewIngestedEventKeyCleanupJob(sqlxDB, 24*time.Hour, 50000, slog.Default())
+
 	// Health Check Server
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -159,7 +191,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:    ":8080",
-		Handler: mux,
+		Handler: multitenancy.TenantMiddleware(sqlxDB, mux),
 	}
 
 	go func() {
@@ -182,6 +214,20 @@ func main() {
 	}()
 
 	go notificationDispatcher.Start(ctx)
+	go metricsRefreshJob.Start(ctx)
+	go tenantRateLimitCleanupJob.Start(ctx)
+	go func() {
+		if err := webhookDispatcher.Run(ctx); err != nil {
+			slog.Error("webhook dispatcher failed", "error", err)
+		}
+	}()
+	go func() {
+		if err := serviceHealthChecker.Run(ctx); err != nil {
+			slog.Error("service health checker failed", "error", err)
+		}
+	}()
+	go idempotencyCleanupJob.Start(ctx)
+	go ingestedEventKeyCleanupJob.Start(ctx)
 
 	// Start Sweepers
 	go func() {
@@ -190,11 +236,13 @@ func main() {
 		capTicker := time.NewTicker(15 * time.Minute)
 		expiryTicker := time.NewTicker(10 * time.Minute)
 		archivalTicker := time.NewTicker(1 * time.Hour)
+		documentRetentionTicker := time.NewTicker(24 * time.Hour)
 		defer slaTicker.Stop()
 		defer approvalTicker.Stop()
 		defer capTicker.Stop()
 		defer expiryTicker.Stop()
 		defer archivalTicker.Stop()
+		defer documentRetentionTicker.Stop()
 
 		for {
 			select {
@@ -219,6 +267,10 @@ func main() {
 			case <-archivalTicker.C:
 				if err := workflowEngine.RunArchivalSweep(ctx); err != nil {
 					slog.Error("archival sweep failed", "error", err)
+				}
+			case <-documentRetentionTicker.C:
+				if err := documentRetentionJob.Run(ctx); err != nil {
+					slog.Error("document retention sweep failed", "error", err)
 				}
 			}
 		}

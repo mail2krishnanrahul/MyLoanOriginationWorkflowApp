@@ -516,7 +516,7 @@ func classifyNetworkError(message, code string, cause error) error {
 		return newTransientChannelError(message, code, nil)
 	}
 	if ne, ok := cause.(net.Error); ok {
-		if ne.Timeout() || ne.Temporary() {
+		if ne.Timeout() {
 			return newTransientChannelError(message, code, cause)
 		}
 	}

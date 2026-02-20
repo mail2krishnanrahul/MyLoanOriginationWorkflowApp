@@ -1,0 +1,10 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: workflow-engine-pdb
+  namespace: workflow-engine
+spec:
+  minAvailable: 66%
+  selector:
+    matchLabels:
+      app: workflow-engine

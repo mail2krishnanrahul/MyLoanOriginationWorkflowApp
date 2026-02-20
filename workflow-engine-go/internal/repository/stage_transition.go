@@ -2,8 +2,11 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 
+	"workflow-engine/internal/document"
 	"workflow-engine/pkg/model"
 )
 
@@ -26,13 +29,21 @@ func (r *Repository) RecordStageTransition(ctx context.Context, tx DBExecutor, i
 		currentStageOrdinal int
 		caseStatus          string
 		rowVersion          int
+		caseTypeCode        string
+		caseTypeVersion     int
 	)
 	err := tx.QueryRow(ctx, `
-		SELECT current_stage_code, current_stage_ordinal, status, row_version
-		FROM cases
-		WHERE id = $1::uuid
+		SELECT c.current_stage_code,
+		       c.current_stage_ordinal,
+		       c.status,
+		       c.row_version,
+		       ct.code AS case_type_code,
+		       ct.version AS case_type_version
+		FROM cases c
+		JOIN case_types ct ON ct.id = c.case_type_id
+		WHERE c.id = $1::uuid
 		FOR UPDATE`, input.CaseID,
-	).Scan(&currentStageCode, &currentStageOrdinal, &caseStatus, &rowVersion)
+	).Scan(&currentStageCode, &currentStageOrdinal, &caseStatus, &rowVersion, &caseTypeCode, &caseTypeVersion)
 	if err != nil {
 		return fmt.Errorf("failed to lock case %s: %w", input.CaseID, err)
 	}
@@ -49,6 +60,38 @@ func (r *Repository) RecordStageTransition(ctx context.Context, tx DBExecutor, i
 	// ---------------------------------------------------------------
 	if currentStageCode != nil && *currentStageCode == input.ToStageCode && currentStageOrdinal == input.ToStageOrdinal {
 		return nil // nothing to do
+	}
+
+	// ---------------------------------------------------------------
+	// 3b. Guard: required documents for current stage must be fulfilled
+	// ---------------------------------------------------------------
+	if r.SQLX != nil && currentStageCode != nil && strings.TrimSpace(*currentStageCode) != "" {
+		fulfilled, missingTypes, reqErr := document.CheckDocumentRequirements(ctx, r.SQLX, input.CaseID, *currentStageCode)
+		if reqErr != nil {
+			return fmt.Errorf("RecordStageTransition: check document requirements: %w", reqErr)
+		}
+		if !fulfilled {
+			missingCodes := make([]string, 0, len(missingTypes))
+			for _, item := range missingTypes {
+				missingCodes = append(missingCodes, item.DocumentTypeCode)
+			}
+			reason := fmt.Sprintf("Missing required documents: %v", missingCodes)
+			payload, _ := json.Marshal(map[string]interface{}{
+				"case_id":             input.CaseID,
+				"from_stage_code":     *currentStageCode,
+				"to_stage_code":       input.ToStageCode,
+				"missing_document_types": missingCodes,
+				"reason":              reason,
+			})
+			_ = r.PublishEvent(ctx, tx, model.Event{
+				CaseID:        &input.CaseID,
+				EventType:     model.EventStageTransitionBlocked,
+				Payload:       payload,
+				Status:        model.EventStatusPending,
+				TargetService: "case-orchestrator",
+			})
+			return fmt.Errorf("RecordStageTransition: %s", reason)
+		}
 	}
 
 	// ---------------------------------------------------------------
@@ -82,6 +125,44 @@ func (r *Repository) RecordStageTransition(ctx context.Context, tx DBExecutor, i
 	}
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("optimistic lock failure on case %s (row_version %d)", input.CaseID, rowVersion)
+	}
+
+	// Create placeholder requests for document requirements that become active
+	// at the newly entered stage.
+	_, err = tx.Exec(ctx, `
+		INSERT INTO document_requests (
+			case_id,
+			case_type_code,
+			case_type_version,
+			document_type_code,
+			required_at_stage,
+			required_count_min,
+			required_count_max,
+			current_count,
+			status,
+			requested_at
+		)
+		SELECT
+			$1::uuid,
+			dt.case_type_code,
+			dt.case_type_version,
+			dt.document_type_code,
+			dt.required_at_stage,
+			dt.required_count_min,
+			dt.required_count_max,
+			0,
+			'PENDING',
+			now()
+		FROM document_types dt
+		WHERE dt.case_type_code = $2
+		  AND dt.case_type_version = $3
+		  AND dt.required_at_stage = $4
+		  AND dt.required_count_min > 0
+		ON CONFLICT (case_id, document_type_code, required_at_stage)
+		DO NOTHING
+	`, input.CaseID, caseTypeCode, caseTypeVersion, input.ToStageCode)
+	if err != nil {
+		return fmt.Errorf("failed to initialize stage document requirements: %w", err)
 	}
 
 	// ---------------------------------------------------------------

@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  workflow-engine:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - DB_URL=postgres://myappuser:password@host.docker.internal:5432/LoanOriginationDB?sslmode=disable
+      - WORKER_COUNT=5
+      - LOG_LEVEL=DEBUG
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  migrate:
+    image: migrate/migrate
+    volumes:
+      - ./db/migrations:/migrations
+    command:
+      - -path=/migrations
+      - -database=postgres://myappuser:password@host.docker.internal:5432/LoanOriginationDB?sslmode=disable
+      - up
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

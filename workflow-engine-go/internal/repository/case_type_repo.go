@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"workflow-engine/internal/multitenancy"
 	"workflow-engine/pkg/model"
 )
 
@@ -22,27 +23,38 @@ func (r *Repository) GetCaseTypeByCodeAndVersion(
 	var configRaw []byte
 	var query string
 	var args []interface{}
+	tenantID, tenantErr := multitenancy.TenantFromContext(ctx)
+	hasTenant := tenantErr == nil
 
 	if version > 0 {
 		query = `
-			SELECT id, code, version, name, description, config,
+			SELECT id, tenant_id::text AS tenant_id, code, version, name, description, config,
 			       status, created_at, updated_at, deprecated_at
 			FROM case_types
 			WHERE code = $1 AND version = $2 AND status = 'ACTIVE'`
 		args = []interface{}{code, version}
+		if hasTenant {
+			query += " AND (tenant_id IS NULL OR tenant_id = $3::uuid)"
+			args = append(args, tenantID)
+		}
 	} else {
 		query = `
-			SELECT id, code, version, name, description, config,
+			SELECT id, tenant_id::text AS tenant_id, code, version, name, description, config,
 			       status, created_at, updated_at, deprecated_at
 			FROM case_types
-			WHERE code = $1 AND status = 'ACTIVE'
-			ORDER BY version DESC
-			LIMIT 1`
+			WHERE code = $1 AND status = 'ACTIVE'`
 		args = []interface{}{code}
+		if hasTenant {
+			query += " AND (tenant_id IS NULL OR tenant_id = $2::uuid)"
+			args = append(args, tenantID)
+		}
+		query += `
+			ORDER BY CASE WHEN tenant_id IS NULL THEN 1 ELSE 0 END, version DESC
+			LIMIT 1`
 	}
 
 	err := tx.QueryRow(ctx, query, args...).Scan(
-		&ct.ID, &ct.Code, &ct.Version, &ct.Name, &ct.Description, &configRaw,
+		&ct.ID, &ct.TenantID, &ct.Code, &ct.Version, &ct.Name, &ct.Description, &configRaw,
 		&ct.Status, &ct.CreatedAt, &ct.UpdatedAt, &ct.DeprecatedAt,
 	)
 	if err != nil {
@@ -63,18 +75,29 @@ func (r *Repository) InsertCaseInstance(
 		tx = r.Pool
 	}
 
+	if ci.TenantID == "" {
+		if tenantID, err := multitenancy.TenantFromContext(ctx); err == nil {
+			ci.TenantID = tenantID
+		} else {
+			ci.TenantID = multitenancy.DefaultTenantID
+		}
+	}
+
 	err := tx.QueryRow(ctx, `
 		INSERT INTO cases (
-			case_type_id, case_type_version,
+			tenant_id,
+			case_type_id, case_type_version, case_type_version_id,
 			parent_case_id, current_stage_code, current_stage_ordinal,
 			status, metadata, assigned_to
 		) VALUES (
-			$1::uuid, $2,
-			$3, $4, $5,
-			$6, $7, $8
+			$1::uuid,
+			$2::uuid, $3, $4::uuid,
+			$5, $6, $7,
+			$8, $9, $10
 		)
 		RETURNING id, reference_number, created_at, updated_at, row_version`,
-		ci.CaseTypeID, ci.CaseTypeVersion,
+		ci.TenantID,
+		ci.CaseTypeID, ci.CaseTypeVersion, ci.CaseTypeID,
 		ci.ParentCaseID, ci.CurrentStageCode, ci.CurrentStageOrdinal,
 		ci.Status, ci.Metadata, ci.AssignedTo,
 	).Scan(&ci.ID, &ci.ReferenceNumber, &ci.CreatedAt, &ci.UpdatedAt, &ci.RowVersion)

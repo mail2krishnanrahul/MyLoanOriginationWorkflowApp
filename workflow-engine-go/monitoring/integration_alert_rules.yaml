@@ -1,0 +1,29 @@
+groups:
+  - name: integration-extensibility-alerts
+    rules:
+      - alert: WEBHOOK_DELIVERY_DEGRADED
+        expr: increase(webhook_deliveries_total{status="ABANDONED"}[5m]) > 10
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Webhook delivery degradation detected"
+          description: "More than 10 webhook deliveries were abandoned in 5 minutes."
+
+      - alert: SERVICE_OFFLINE_ALERT
+        expr: service_health_status == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "External service offline"
+          description: "At least one external service has been offline for 3 minutes."
+
+      - alert: EVENT_INGESTION_DEGRADED
+        expr: increase(external_events_rejected_total[1m]) > 50
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "External event ingestion degraded"
+          description: "More than 50 external events were rejected in 1 minute."

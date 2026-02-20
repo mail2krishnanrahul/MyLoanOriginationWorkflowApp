@@ -68,6 +68,7 @@ func (p TaskPriority) String() string {
 // Task is the atomic unit of work consumed by workers.
 type Task struct {
 	ID                 string          `json:"id"                   db:"id"`
+	TenantID           string          `json:"tenant_id"            db:"tenant_id"`
 	CaseID             string          `json:"case_id"              db:"case_id"`
 	TaskDefinitionCode string          `json:"task_definition_code" db:"task_definition_code"`
 	ActivityCode       string          `json:"activity_code"        db:"activity_code"`
@@ -75,6 +76,7 @@ type Task struct {
 	RequiresApproval   bool            `json:"requires_approval"    db:"requires_approval"`
 	ApprovalGateID     *string         `json:"approval_gate_id"     db:"approval_gate_id"`
 	ApprovalAmount     *float64        `json:"approval_amount"      db:"approval_amount"`
+	IsDocumentVerification bool        `json:"is_document_verification" db:"is_document_verification"`
 	Status             TaskStatus      `json:"status"               db:"status"`
 	Priority           TaskPriority    `json:"priority"             db:"priority"`
 	AssignedService    *string         `json:"assigned_service"     db:"assigned_service"`
@@ -84,6 +86,12 @@ type Task struct {
 	DueAt              *time.Time      `json:"due_at"               db:"due_at"`
 	RetryCount         int             `json:"retry_count"          db:"retry_count"`
 	MaxRetries         int             `json:"max_retries"          db:"max_retries"`
+	TotalFailureCount  int             `json:"total_failure_count"  db:"total_failure_count"`
+	IsPoisonPill       bool            `json:"is_poison_pill"       db:"is_poison_pill"`
+	PoisonPillQuarantinedAt *time.Time `json:"poison_pill_quarantined_at" db:"poison_pill_quarantined_at"`
+	PoisonPillReason   *string         `json:"poison_pill_reason"   db:"poison_pill_reason"`
+	LastErrorCode      *string         `json:"last_error_code"      db:"last_error_code"`
+	LastErrorClass     *string         `json:"last_error_class"     db:"last_error_class"`
 	InputPayload       json.RawMessage `json:"input_payload"        db:"input_payload"`
 	OutputPayload      json.RawMessage `json:"output_payload"       db:"output_payload"`
 	Metadata           json.RawMessage `json:"metadata"             db:"metadata"`

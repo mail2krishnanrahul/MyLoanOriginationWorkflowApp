@@ -58,6 +58,7 @@ type TaskInstance struct {
 // OutboxEvent represents an event in the events_outbox table.
 type OutboxEvent struct {
 	ID          string          `json:"id"`
+	TenantID    string          `json:"tenant_id,omitempty"`
 	CaseID      *string         `json:"case_id,omitempty"`
 	TaskID      *string         `json:"task_id,omitempty"`
 	EventType   string          `json:"event_type"`

@@ -32,6 +32,7 @@ const (
 // One row = one version of a definition (e.g. HOME_LOAN v1).
 type CaseType struct {
 	ID           string         `json:"id"            db:"id"`
+	TenantID     *string        `json:"tenant_id,omitempty" db:"tenant_id"`
 	Code         string         `json:"code"          db:"code"`
 	Version      int            `json:"version"       db:"version"`
 	Name         string         `json:"name"          db:"name"`
@@ -49,13 +50,16 @@ type CaseType struct {
 
 // CaseTypeConfig is the top-level JSON structure stored in the config column.
 type CaseTypeConfig struct {
-	Stages            []StageDefinitionV2 `json:"stages"`
-	SubCaseTypes      []string            `json:"sub_case_types,omitempty"` // e.g. ["CREDIT_CHECK", "VALUATION"]
-	DefaultCalendarID string              `json:"default_calendar_id,omitempty"`
-	SLA               *SLAHierarchyConfig `json:"sla,omitempty"`
-	ApprovalChain     []ApprovalChainTierDefinition `json:"approval_chain,omitempty"`
-	FallbackSupervisorRole string `json:"fallback_supervisor_role,omitempty"`
-	MaxReworkAttempts int `json:"max_rework_attempts,omitempty"`
+	Stages                 []StageDefinitionV2          `json:"stages"`
+	SubCaseTypes           []string                     `json:"sub_case_types,omitempty"` // e.g. ["CREDIT_CHECK", "VALUATION"]
+	DefaultCalendarID      string                       `json:"default_calendar_id,omitempty"`
+	SLA                    *SLAHierarchyConfig          `json:"sla,omitempty"`
+	ApprovalChain          []ApprovalChainTierDefinition `json:"approval_chain,omitempty"`
+	FallbackSupervisorRole string                       `json:"fallback_supervisor_role,omitempty"`
+	MaxReworkAttempts      int                          `json:"max_rework_attempts,omitempty"`
+	DocumentTypes          []DocumentTypeDefinition     `json:"document_types,omitempty"`
+	AggregationRules       []AggregationRule            `json:"aggregation_rules,omitempty"`
+	PoisonPillThreshold    int                          `json:"poison_pill_threshold,omitempty"`
 }
 
 // Scan implements the sql.Scanner interface so pgx can read JSONB into this struct.
@@ -110,14 +114,65 @@ type ActivityConfig struct {
 
 // TaskDefinitionV2 is the smallest executable unit in a workflow.
 type TaskDefinitionV2 struct {
-	Code          string          `json:"code"`
-	Name          string          `json:"name"`
-	Description   string          `json:"description,omitempty"`
-	Type          string          `json:"type"` // SYSTEM or USER
-	Required      bool            `json:"required"`
-	SequenceOrder int             `json:"sequence_order"`
-	Config        json.RawMessage `json:"config,omitempty"` // UI hints, endpoints, timeouts, etc.
-	SLA           *SLADefinition  `json:"sla,omitempty"`
-	RequiresApproval bool         `json:"requires_approval,omitempty"`
-	Approval         *ApprovalDefinition `json:"approval,omitempty"`
+	Code                   string                 `json:"code"`
+	Name                   string                 `json:"name"`
+	Description            string                 `json:"description,omitempty"`
+	Type                   string                 `json:"type"` // SYSTEM or USER
+	Required               bool                   `json:"required"`
+	SequenceOrder          int                    `json:"sequence_order"`
+	Config                 json.RawMessage        `json:"config,omitempty"` // UI hints, endpoints, timeouts, etc.
+	SLA                    *SLADefinition         `json:"sla,omitempty"`
+	RequiresApproval       bool                   `json:"requires_approval,omitempty"`
+	Approval               *ApprovalDefinition    `json:"approval,omitempty"`
+	IsDocumentVerification bool                   `json:"is_document_verification,omitempty"`
+	DocumentTypeCode       string                 `json:"document_type_code,omitempty"`
+	RetryPolicy            *TaskRetryPolicy       `json:"retry_policy,omitempty"`
+	FailureSeverity        TaskFailureSeverity    `json:"failure_severity,omitempty"`
+	EscalateCaseOnFailure  bool                   `json:"escalate_case_on_failure,omitempty"`
+	CompensatingTaskCode   string                 `json:"compensating_task_code,omitempty"`
+	PoisonPillThreshold    int                    `json:"poison_pill_threshold,omitempty"`
+	Inputs                 []TaskInputDefinition  `json:"inputs,omitempty"`
+	Outputs                []TaskOutputDefinition `json:"outputs,omitempty"`
+	InputSchema            map[string]interface{} `json:"input_schema,omitempty"`
+	OutputSchema           map[string]interface{} `json:"output_schema,omitempty"`
+}
+
+// DocumentTypeDefinition configures allowed/required document categories for a case type.
+type DocumentTypeDefinition struct {
+	DocumentTypeCode      string   `json:"document_type_code"`
+	DisplayName           string   `json:"display_name"`
+	Description           string   `json:"description,omitempty"`
+	AllowedExtensions     []string `json:"allowed_extensions"`
+	MaxSizeMB             int      `json:"max_size_mb"`
+	RequiredAtStage       string   `json:"required_at_stage,omitempty"`
+	RequiredCountMin      int      `json:"required_count_min,omitempty"`
+	RequiredCountMax      int      `json:"required_count_max,omitempty"`
+	IsSensitive           bool     `json:"is_sensitive,omitempty"`
+	RequiresVerification  bool     `json:"requires_verification,omitempty"`
+	VerificationRole      string   `json:"verification_role,omitempty"`
+	RetentionDays         int      `json:"retention_days,omitempty"`
+	RetentionPolicy       string   `json:"retention_policy,omitempty"`
+	AllowedViewers        []string `json:"allowed_viewers,omitempty"`
+}
+
+// TaskInputDefinition describes one resolved input field dependency for a task.
+type TaskInputDefinition struct {
+	Field      string `json:"field"`
+	SourceTask string `json:"source_task,omitempty"`
+	SourceField string `json:"source_field,omitempty"`
+	Required   bool   `json:"required,omitempty"`
+}
+
+// TaskOutputDefinition describes one output field produced by a task.
+type TaskOutputDefinition struct {
+	Field string `json:"field"`
+	Type  string `json:"type,omitempty"`
+}
+
+// AggregationRule maps task data into case metadata at task completion.
+type AggregationRule struct {
+	TargetField    string `json:"target_field"`
+	SourceTask     string `json:"source_task"`
+	SourceField    string `json:"source_field"`
+	OnTaskComplete bool   `json:"on_task_complete,omitempty"`
 }

@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: workflow-engine
+  labels:
+    name: workflow-engine
+    environment: production

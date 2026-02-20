@@ -17,6 +17,7 @@ const (
 	CaseStatusSuspended  = "SUSPENDED"
 	CaseStatusRejected   = "REJECTED"
 	CaseStatusCloned     = "CLONED"
+	CaseStatusException  = "EXCEPTION"
 )
 
 // ---------------------------------------------------------------------------
@@ -27,6 +28,7 @@ const (
 // tracked through the workflow engine.
 type CaseInstance struct {
 	ID                  string          `json:"id"                    db:"id"`
+	TenantID            string          `json:"tenant_id"             db:"tenant_id"`
 	ReferenceNumber     string          `json:"reference_number"      db:"reference_number"`
 	CaseTypeID          string          `json:"case_type_id"          db:"case_type_id"`
 	CaseTypeVersion     int             `json:"case_type_version"     db:"case_type_version"`
@@ -51,6 +53,10 @@ type CaseInstance struct {
 	EmergencyClosedAt *time.Time `json:"emergency_closed_at"   db:"emergency_closed_at"`
 	EmergencyReason   *string    `json:"emergency_reason"      db:"emergency_reason"`
 	SupervisorID      *string    `json:"supervisor_id"         db:"supervisor_id"`
+	ExceptionAt       *time.Time `json:"exception_at"          db:"exception_at"`
+	ExceptionReason   *string    `json:"exception_reason"      db:"exception_reason"`
+	ExceptionTaskID   *string    `json:"exception_task_id"     db:"exception_task_id"`
+	ExceptionSeverity *string    `json:"exception_severity"    db:"exception_severity"`
 }
 
 // IsRegression returns true when the proposed newOrdinal is strictly less than

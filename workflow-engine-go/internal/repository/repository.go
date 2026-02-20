@@ -2,9 +2,12 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
+	"workflow-engine/internal/integration"
+	"workflow-engine/internal/multitenancy"
 	"workflow-engine/pkg/model"
 
 	"github.com/jmoiron/sqlx"
@@ -48,15 +51,24 @@ func (r *Repository) PollPendingEvents(ctx context.Context, limit int) ([]model.
 	}
 	defer tx.Rollback(ctx)
 
-	rows, err := tx.Query(ctx, `
-		SELECT id, case_id::text AS case_id, task_id::text AS task_id, event_type, payload, status, created_at, attempts
+	query := `
+		SELECT id::text AS id, tenant_id::text AS tenant_id, case_id::text AS case_id, task_id::text AS task_id, event_type, payload, status, created_at, attempts
 		FROM events_outbox
 		WHERE status = $1
 		ORDER BY created_at ASC
 		LIMIT $2
-		FOR UPDATE SKIP LOCKED`,
-		model.OutboxStatusPending, limit,
-	)
+		FOR UPDATE SKIP LOCKED`
+	args := []interface{}{model.OutboxStatusPending, limit}
+	if tenantID, err := multitenancy.TenantFromContext(ctx); err == nil {
+		scopedQuery, scopedArgs, scopeErr := multitenancy.AssertTenantScope(ctx, query, args)
+		if scopeErr != nil {
+			return nil, fmt.Errorf("PollPendingEvents: %w", scopeErr)
+		}
+		query = scopedQuery
+		args = scopedArgs
+		_ = tenantID
+	}
+	rows, err := tx.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("PollPendingEvents: query: %w", err)
 	}
@@ -70,6 +82,7 @@ func (r *Repository) PollPendingEvents(ctx context.Context, limit int) ([]model.
 		var taskID *string
 		if err := rows.Scan(
 			&event.ID,
+			&event.TenantID,
 			&caseID,
 			&taskID,
 			&event.EventType,
@@ -94,11 +107,21 @@ func (r *Repository) PollPendingEvents(ctx context.Context, limit int) ([]model.
 	}
 
 	// Atomically claim all polled events within the same transaction
-	_, err = tx.Exec(ctx, `
+	claimQuery := `
 		UPDATE events_outbox
 		SET status = 'PROCESSING',
 		    last_attempted_at = now()
-		WHERE id = ANY($1::uuid[])`, ids)
+		WHERE id = ANY($1::uuid[])`
+	claimArgs := []interface{}{ids}
+	if _, err := multitenancy.TenantFromContext(ctx); err == nil {
+		scopedQuery, scopedArgs, scopeErr := multitenancy.AssertTenantScope(ctx, claimQuery, claimArgs)
+		if scopeErr != nil {
+			return nil, fmt.Errorf("PollPendingEvents: %w", scopeErr)
+		}
+		claimQuery = scopedQuery
+		claimArgs = scopedArgs
+	}
+	_, err = tx.Exec(ctx, claimQuery, claimArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("PollPendingEvents: claim events: %w", err)
 	}
@@ -122,7 +145,16 @@ func (r *Repository) UpdateEventStatus(ctx context.Context, executor DBExecutor,
 		executor = r.Pool
 	}
 
-	tag, err := executor.Exec(ctx, query, status, time.Now(), eventID)
+	args := []interface{}{status, time.Now(), eventID}
+	if _, err := multitenancy.TenantFromContext(ctx); err == nil {
+		scopedQuery, scopedArgs, scopeErr := multitenancy.AssertTenantScope(ctx, query, args)
+		if scopeErr != nil {
+			return fmt.Errorf("UpdateEventStatus: %w", scopeErr)
+		}
+		query = scopedQuery
+		args = scopedArgs
+	}
+	tag, err := executor.Exec(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("failed to update event %s status to %s: %w", eventID, status, err)
 	}
@@ -248,10 +280,6 @@ func (r *Repository) GetNextStageDefinition(ctx context.Context, tx DBExecutor, 
 // InsertOutboxEvent inserts a new event into the outbox.
 // target_service defaults to "case-orchestrator" when not specified in the payload.
 func (r *Repository) InsertOutboxEvent(ctx context.Context, executor DBExecutor, eventType string, payload map[string]interface{}) error {
-	query := `
-        INSERT INTO events_outbox (event_type, payload, status, target_service)
-        VALUES ($1, $2, $3, $4)`
-
 	if executor == nil {
 		executor = r.Pool
 	}
@@ -261,9 +289,36 @@ func (r *Repository) InsertOutboxEvent(ctx context.Context, executor DBExecutor,
 	if ts, ok := payload["_target_service"].(string); ok && ts != "" {
 		targetService = ts
 	}
+	rawPayload := map[string]interface{}{}
+	for k, v := range payload {
+		rawPayload[k] = v
+	}
+	data, err := json.Marshal(rawPayload)
+	if err != nil {
+		return fmt.Errorf("InsertOutboxEvent: marshal payload: %w", err)
+	}
+	prepared, err := multitenancy.PrepareEventForPublish(ctx, model.Event{
+		EventType:     model.EventType(eventType),
+		Payload:       data,
+		Status:        model.EventStatusPending,
+		TargetService: targetService,
+		MaxAttempts:   5,
+	})
+	if err != nil {
+		return fmt.Errorf("InsertOutboxEvent: prepare event: %w", err)
+	}
 
-	_, err := executor.Exec(ctx, query, eventType, payload, model.OutboxStatusPending, targetService)
-	return err
+	query := `
+        INSERT INTO events_outbox (tenant_id, event_type, payload, status, target_service, max_attempts, partition_key)
+        VALUES ($1::uuid, $2, $3, $4, $5, $6, $7)`
+	_, err = executor.Exec(ctx, query, prepared.TenantID, eventType, prepared.Payload, model.OutboxStatusPending, targetService, 5, prepared.TenantID)
+	if err != nil {
+		return fmt.Errorf("InsertOutboxEvent: insert outbox row: %w", err)
+	}
+	if err := integration.EnqueueWebhookDeliveriesPGX(ctx, executor, prepared.TenantID, prepared); err != nil {
+		return fmt.Errorf("InsertOutboxEvent: enqueue webhook deliveries: %w", err)
+	}
+	return nil
 }
 
 // WithTransaction executes a function within a transaction

@@ -117,3 +117,10 @@ CREATE TRIGGER cases_updated_at
     BEFORE UPDATE ON cases
     FOR EACH ROW
     EXECUTE FUNCTION trg_set_updated_at();
+
+-- -------------------------------------------------------------------
+-- Add delayed foreign key for component_instances (from 000005)
+-- -------------------------------------------------------------------
+ALTER TABLE component_instances
+    ADD CONSTRAINT fk_component_instances_cases
+    FOREIGN KEY (case_id) REFERENCES cases(id) ON DELETE CASCADE;

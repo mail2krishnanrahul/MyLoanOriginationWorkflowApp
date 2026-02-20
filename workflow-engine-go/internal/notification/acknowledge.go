@@ -34,7 +34,7 @@ func AcknowledgeNotification(ctx context.Context, db *sqlx.DB, notificationID st
 		  ON t.trigger_code = q.trigger_code
 		WHERE q.id = $1::uuid
 		  AND t.recipient_type = 'BORROWER'
-		FOR UPDATE
+		FOR UPDATE OF q
 	`, notificationID)
 	if err != nil {
 		if err == sql.ErrNoRows {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"workflow-engine/internal/engine/assignment"
+	"workflow-engine/internal/multitenancy"
 	"workflow-engine/internal/repository"
 	"workflow-engine/pkg/model"
 
@@ -114,12 +115,14 @@ func (e *Engine) worker(ctx context.Context, wg *sync.WaitGroup, id int, eventCh
 }
 
 func (e *Engine) processEvent(ctx context.Context, event model.OutboxEvent) error {
+	eventCtx := multitenancy.WithTenant(ctx, strings.TrimSpace(event.TenantID))
+
 	// Attempt to process business logic and mark as PROCESSED atomically
-	err := e.Repo.WithTransaction(ctx, func(tx pgx.Tx) error {
+	err := e.Repo.WithTransaction(eventCtx, func(tx pgx.Tx) error {
 		// 1. Business Logic
 		var processingErr error
 		if event.EventType == string(model.EventTaskCompleted) {
-			processingErr = e.handleTaskCompleted(ctx, tx, event)
+			processingErr = e.handleTaskCompleted(eventCtx, tx, event)
 		} else if event.EventType == string(model.EventTaskQueued) {
 			// Auto-assign logic
 			payload := event.PayloadMap()
@@ -152,7 +155,7 @@ func (e *Engine) processEvent(ctx context.Context, event model.OutboxEvent) erro
 				var task model.Task
 				err := tx.QueryRow(ctx, `SELECT id, workbasket_id, required_skills FROM tasks WHERE id = $1::uuid`, taskID).Scan(&task.ID, &task.WorkbasketID, &task.RequiredSkills)
 				if err == nil {
-					processingErr = e.AssignmentManager.AutoAssign(ctx, tx, &task)
+					processingErr = e.AssignmentManager.AutoAssign(eventCtx, tx, &task)
 				} else {
 					slog.Error("failed to fetch task for assignment", "task_id", taskID, "error", err)
 				}
@@ -165,9 +168,11 @@ func (e *Engine) processEvent(ctx context.Context, event model.OutboxEvent) erro
 				var basketID string
 				err := tx.QueryRow(ctx, `SELECT id FROM workbaskets WHERE type = 'ESCALATION' LIMIT 1`).Scan(&basketID)
 				if err == nil {
-					processingErr = e.AssignmentManager.AssignToWorkbasket(ctx, tx, taskID, basketID)
+					processingErr = e.AssignmentManager.AssignToWorkbasket(eventCtx, tx, taskID, basketID)
 				}
 			}
+		} else if event.EventType == string(model.EventTenantConfigUpdated) {
+			processingErr = multitenancy.HandleTenantConfigUpdatedEvent(eventCtx, event.Payload)
 		} else {
 			slog.Warn("unknown event type", "event_type", event.EventType)
 			// Unknown event is treated as processed to avoid loops
@@ -179,13 +184,14 @@ func (e *Engine) processEvent(ctx context.Context, event model.OutboxEvent) erro
 
 		if e.EventObserver != nil && !isNotificationInternalOutboxEvent(event.EventType) {
 			domainEvent := toDomainEvent(event)
-			if err := e.EventObserver.HandleEvent(ctx, domainEvent); err != nil {
+			domainCtx := multitenancy.EnsureTenantContextForEvent(eventCtx, domainEvent)
+			if err := e.EventObserver.HandleEvent(domainCtx, domainEvent); err != nil {
 				return fmt.Errorf("event observer failed: %w", err)
 			}
 		}
 
 		// 2. Mark as PROCESSED (inside same transaction)
-		return e.Repo.UpdateEventStatus(ctx, tx, event.ID, model.OutboxStatusProcessed, nil)
+		return e.Repo.UpdateEventStatus(eventCtx, tx, event.ID, model.OutboxStatusProcessed, nil)
 	})
 
 	if err != nil {
@@ -195,7 +201,7 @@ func (e *Engine) processEvent(ctx context.Context, event model.OutboxEvent) erro
 		// We use a new context or the existing one? Existing is fine if not cancelled.
 		// We rely on repository to use its internal pool if tx is nil.
 		msg := err.Error()
-		if updateErr := e.Repo.UpdateEventStatus(ctx, nil, event.ID, model.OutboxStatusFailed, &msg); updateErr != nil {
+		if updateErr := e.Repo.UpdateEventStatus(eventCtx, nil, event.ID, model.OutboxStatusFailed, &msg); updateErr != nil {
 			slog.Error("CRITICAL: failed to update event status to FAILED", "error", updateErr)
 		}
 		return err
@@ -222,6 +228,7 @@ func toDomainEvent(outbox model.OutboxEvent) model.Event {
 
 	event := model.Event{
 		ID:        outbox.ID,
+		TenantID:  outbox.TenantID,
 		EventType: model.EventType(outbox.EventType),
 		Payload:   outbox.Payload,
 		Status:    model.EventStatusPending,

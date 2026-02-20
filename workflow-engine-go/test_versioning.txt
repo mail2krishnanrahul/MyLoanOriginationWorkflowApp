@@ -1,0 +1,119 @@
+=== RUN   TestImmutabilityEnforcement_AssertCaseTypeIsMutable
+=== RUN   TestImmutabilityEnforcement_AssertCaseTypeIsMutable/happy_path_draft_is_mutable
+=== RUN   TestImmutabilityEnforcement_AssertCaseTypeIsMutable/edge_active_is_immutable
+2026/02/20 22:34:14 WARN blocked immutable case_type mutation attempt case_type_id=ct-1 status=ACTIVE actor=unknown
+=== RUN   TestImmutabilityEnforcement_AssertCaseTypeIsMutable/failure_db_error
+--- PASS: TestImmutabilityEnforcement_AssertCaseTypeIsMutable (0.00s)
+    --- PASS: TestImmutabilityEnforcement_AssertCaseTypeIsMutable/happy_path_draft_is_mutable (0.00s)
+    --- PASS: TestImmutabilityEnforcement_AssertCaseTypeIsMutable/edge_active_is_immutable (0.00s)
+    --- PASS: TestImmutabilityEnforcement_AssertCaseTypeIsMutable/failure_db_error (0.00s)
+=== RUN   TestVersionPinning_ResolveCaseTypeConfig_DeprecatedPinnedVersion
+--- PASS: TestVersionPinning_ResolveCaseTypeConfig_DeprecatedPinnedVersion (0.00s)
+=== RUN   TestConfigurationAuditTrail_RecordCaseTypeAudit_OutsideTransaction
+--- PASS: TestConfigurationAuditTrail_RecordCaseTypeAudit_OutsideTransaction (0.00s)
+=== RUN   TestVersionQueryFunctions_ListCaseTypeVersions_PaginationBeyondTotalCount
+    service_test.go:189: 
+        	Error Trace:	C:/MyProjects/MyLoanOriginationWorkflowApp/workflow-engine-go/internal/versioning/service_test.go:189
+        	Error:      	Received unexpected error:
+        	            	ListCaseTypeVersions: count versions: Query: could not match actual sql: "SELECT COALESCE(SUM(c), 0)::int FROM ( SELECT COUNT(*)::int AS c FROM case_types WHERE code = $1 AND tenant_id IS NOT NULL WHERE tenant_id = $2 UNION ALL SELECT COUNT(*)::int AS c FROM case_types WHERE code = $1 AND tenant_id IS NULL ) counts" with expected regexp "SELECT COUNT\(\*\) FROM case_types WHERE code = \$1"
+        	Test:       	TestVersionQueryFunctions_ListCaseTypeVersions_PaginationBeyondTotalCount
+    service_test.go:190: 
+        	Error Trace:	C:/MyProjects/MyLoanOriginationWorkflowApp/workflow-engine-go/internal/versioning/service_test.go:190
+        	Error:      	Not equal: 
+        	            	expected: 1
+        	            	actual  : 0
+        	Test:       	TestVersionQueryFunctions_ListCaseTypeVersions_PaginationBeyondTotalCount
+    service_test.go:192: 
+        	Error Trace:	C:/MyProjects/MyLoanOriginationWorkflowApp/workflow-engine-go/internal/versioning/service_test.go:192
+        	Error:      	Received unexpected error:
+        	            	there is a remaining expectation which was not matched: ExpectedQuery => expecting Query, QueryContext or QueryRow which:
+        	            	  - matches sql: 'SELECT COUNT\(\*\)
+        	            			FROM case_types
+        	            			WHERE code = \$1'
+        	            	  - is with arguments:
+        	            	    0 - HOME_LOAN
+        	            	  - should return rows:
+        	            	    row 0 - [1]
+        	Test:       	TestVersionQueryFunctions_ListCaseTypeVersions_PaginationBeyondTotalCount
+--- FAIL: TestVersionQueryFunctions_ListCaseTypeVersions_PaginationBeyondTotalCount (0.00s)
+=== RUN   TestVersionQueryFunctions_GetActiveCaseTypeVersion_NoActiveVersion
+    service_test.go:204: 
+        	Error Trace:	C:/MyProjects/MyLoanOriginationWorkflowApp/workflow-engine-go/internal/versioning/service_test.go:204
+        	Error:      	Target error should be in err chain:
+        	            	expected: "no active case_type version"
+        	            	in chain: "GetActiveCaseTypeVersion: query active version: Query '\n\t\tSELECT *\n\t\tFROM (\n\t\t\tSELECT\n\t\t\tid::text AS id,\n\t\t\ttenant_id::text AS tenant_id,\n\t\t\tcode,\n\t\t\tversion,\n\t\t\tname,\n\t\t\tdescription,\n\t\t\tconfig,\n\t\t\tstatus,\n\t\t\tcreated_at,\n\t\t\tupdated_at,\n\t\t\tactivated_at,\n\t\t\tactivated_by,\n\t\t\tdeprecated_at,\n\t\t\tdeprecated_by\n\t\tFROM case_types\n\t\tWHERE code = $1\n\t\t  AND status = 'ACTIVE'\n\t\t  AND tenant_id IS NOT NULL WHERE tenant_id = $2\n\t\t\tUNION ALL\n\t\t\tSELECT\n\t\t\t\tid::text AS id,\n\t\t\t\ttenant_id::text AS tenant_id,\n\t\t\t\tcode,\n\t\t\t\tversion,\n\t\t\t\tname,\n\t\t\t\tdescription,\n\t\t\t\tconfig,\n\t\t\t\tstatus,\n\t\t\t\tcreated_at,\n\t\t\t\tupdated_at,\n\t\t\t\tactivated_at,\n\t\t\t\tactivated_by,\n\t\t\t\tdeprecated_at,\n\t\t\t\tdeprecated_by\n\t\t\tFROM case_types\n\t\t\tWHERE code = $1\n\t\t\t  AND status = 'ACTIVE'\n\t\t\t  AND tenant_id IS NULL\n\t\t) ct\n\t\tORDER BY CASE WHEN ct.tenant_id IS NULL THEN 1 ELSE 0 END, ct.version DESC\n\t\tLIMIT 1\n\t', arguments do not match: expected 1, but got 2 arguments"
+        	            		"Query '\n\t\tSELECT *\n\t\tFROM (\n\t\t\tSELECT\n\t\t\tid::text AS id,\n\t\t\ttenant_id::text AS tenant_id,\n\t\t\tcode,\n\t\t\tversion,\n\t\t\tname,\n\t\t\tdescription,\n\t\t\tconfig,\n\t\t\tstatus,\n\t\t\tcreated_at,\n\t\t\tupdated_at,\n\t\t\tactivated_at,\n\t\t\tactivated_by,\n\t\t\tdeprecated_at,\n\t\t\tdeprecated_by\n\t\tFROM case_types\n\t\tWHERE code = $1\n\t\t  AND status = 'ACTIVE'\n\t\t  AND tenant_id IS NOT NULL WHERE tenant_id = $2\n\t\t\tUNION ALL\n\t\t\tSELECT\n\t\t\t\tid::text AS id,\n\t\t\t\ttenant_id::text AS tenant_id,\n\t\t\t\tcode,\n\t\t\t\tversion,\n\t\t\t\tname,\n\t\t\t\tdescription,\n\t\t\t\tconfig,\n\t\t\t\tstatus,\n\t\t\t\tcreated_at,\n\t\t\t\tupdated_at,\n\t\t\t\tactivated_at,\n\t\t\t\tactivated_by,\n\t\t\t\tdeprecated_at,\n\t\t\t\tdeprecated_by\n\t\t\tFROM case_types\n\t\t\tWHERE code = $1\n\t\t\t  AND status = 'ACTIVE'\n\t\t\t  AND tenant_id IS NULL\n\t\t) ct\n\t\tORDER BY CASE WHEN ct.tenant_id IS NULL THEN 1 ELSE 0 END, ct.version DESC\n\t\tLIMIT 1\n\t', arguments do not match: expected 1, but got 2 arguments"
+        	Test:       	TestVersionQueryFunctions_GetActiveCaseTypeVersion_NoActiveVersion
+    service_test.go:205: 
+        	Error Trace:	C:/MyProjects/MyLoanOriginationWorkflowApp/workflow-engine-go/internal/versioning/service_test.go:205
+        	Error:      	Received unexpected error:
+        	            	there is a remaining expectation which was not matched: ExpectedQuery => expecting Query, QueryContext or QueryRow which:
+        	            	  - matches sql: '(?s)FROM case_types\s+WHERE code = \$1\s+AND status = 'ACTIVE''
+        	            	  - is with arguments:
+        	            	    0 - HOME_LOAN
+        	            	  - should return error: sql: no rows in result set
+        	Test:       	TestVersionQueryFunctions_GetActiveCaseTypeVersion_NoActiveVersion
+--- FAIL: TestVersionQueryFunctions_GetActiveCaseTypeVersion_NoActiveVersion (0.00s)
+=== RUN   TestVersionQueryFunctions_GetCaseTypeVersionDiff_NotFound
+--- PASS: TestVersionQueryFunctions_GetCaseTypeVersionDiff_NotFound (0.00s)
+=== RUN   TestActivationGate_ActivateCaseTypeVersion_FirstActivationNoPreviousActive
+    service_test.go:263: 
+        	Error Trace:	C:/MyProjects/MyLoanOriginationWorkflowApp/workflow-engine-go/internal/versioning/service_test.go:263
+        	Error:      	Received unexpected error:
+        	            	ActivateCaseTypeVersion: publish CASE_TYPE_ACTIVATED: publishCaseTypeEvent: PublishEvent: ExecQuery '
+        	            			INSERT INTO events_outbox (
+        	            				tenant_id,
+        	            				case_id,
+        	            				task_id,
+        	            				event_type,
+        	            				payload,
+        	            				status,
+        	            				target_service,
+        	            				max_attempts,
+        	            				partition_key,
+        	            				trace_id
+        	            			) VALUES (
+        	            				$1::uuid,
+        	            				$2::uuid,
+        	            				$3::uuid,
+        	            				$4,
+        	            				$5::jsonb,
+        	            				$6,
+        	            				$7,
+        	            				$8,
+        	            				$9,
+        	            				$10
+        	            			)
+        	            		', arguments do not match: expected 9, but got 10 arguments
+        	Test:       	TestActivationGate_ActivateCaseTypeVersion_FirstActivationNoPreviousActive
+    service_test.go:264: 
+        	Error Trace:	C:/MyProjects/MyLoanOriginationWorkflowApp/workflow-engine-go/internal/versioning/service_test.go:264
+        	Error:      	Received unexpected error:
+        	            	there is a remaining expectation which was not matched: ExpectedExec => expecting Exec or ExecContext which:
+        	            	  - matches sql: '(?s)INSERT INTO events_outbox'
+        	            	  - is with arguments:
+        	            	    0 - <nil>
+        	            	    1 - <nil>
+        	            	    2 - CASE_TYPE_ACTIVATED
+        	            	    3 - {}
+        	            	    4 - PENDING
+        	            	    5 - case-orchestrator
+        	            	    6 - 5
+        	            	    7 - <nil>
+        	            	    8 - <nil>
+        	            	  - should return Result having:
+        	            	      LastInsertId: 0
+        	            	      RowsAffected: 1
+        	Test:       	TestActivationGate_ActivateCaseTypeVersion_FirstActivationNoPreviousActive
+--- FAIL: TestActivationGate_ActivateCaseTypeVersion_FirstActivationNoPreviousActive (0.00s)
+=== RUN   TestActivationGate_ActivateCaseTypeVersion_MultipleValidationViolations
+2026/02/20 22:34:14 WARN case_type config validation failed violations=5
+--- PASS: TestActivationGate_ActivateCaseTypeVersion_MultipleValidationViolations (0.00s)
+=== RUN   TestDiffAndChangelog_DiffCaseTypeVersions_NoFieldsChanged
+2026/02/20 22:34:14 INFO stored case_type diff from_case_type_id=ct-v1 to_case_type_id=ct-v2 diff_id=diff-1 is_empty=true
+--- PASS: TestDiffAndChangelog_DiffCaseTypeVersions_NoFieldsChanged (0.00s)
+=== RUN   TestInFlightCaseMigration_MigrateCaseToLatestVersion_CurrentStageMissingInTarget
+--- PASS: TestInFlightCaseMigration_MigrateCaseToLatestVersion_CurrentStageMissingInTarget (0.00s)
+FAIL
+FAIL	workflow-engine/internal/versioning	0.217s
+FAIL

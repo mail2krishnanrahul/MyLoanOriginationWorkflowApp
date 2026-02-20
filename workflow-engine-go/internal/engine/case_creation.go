@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
+	"workflow-engine/internal/multitenancy"
 	"workflow-engine/internal/repository"
 	"workflow-engine/internal/sla"
 	"workflow-engine/pkg/model"
@@ -52,11 +54,34 @@ func CreateCase(
 	repo *repository.Repository,
 	req CreateCaseRequest,
 ) (CreateCaseResponse, error) {
+	tenantID, tenantErr := multitenancy.TenantFromContext(ctx)
+	if tenantErr != nil {
+		tenantID = multitenancy.DefaultTenantID
+		ctx = multitenancy.WithTenant(ctx, tenantID)
+	}
+	if repo.SQLX != nil {
+		if err := multitenancy.AssertTenantOperational(ctx, repo.SQLX, tenantID); err != nil {
+			return CreateCaseResponse{}, fmt.Errorf("CreateCase: tenant not operational: %w", err)
+		}
+		if err := multitenancy.EnforceTenantCaseLimits(ctx, repo.SQLX, tenantID); err != nil {
+			return CreateCaseResponse{}, fmt.Errorf("CreateCase: tenant capacity exceeded: %w", err)
+		}
+		visible, err := multitenancy.IsCaseTypeVisibleToTenant(ctx, repo.SQLX, req.CaseTypeCode, tenantID)
+		if err != nil {
+			return CreateCaseResponse{}, fmt.Errorf("CreateCase: resolve case type visibility: %w", err)
+		}
+		if !visible {
+			return CreateCaseResponse{}, fmt.Errorf("CreateCase: %w", multitenancy.ErrCaseTypeForbidden)
+		}
+	}
 
 	// 1. Validate case_type
 	caseType, err := repo.GetCaseTypeByCodeAndVersion(ctx, nil, req.CaseTypeCode, req.CaseTypeVersion)
 	if err != nil {
 		return CreateCaseResponse{}, fmt.Errorf("invalid case_type: %w", err)
+	}
+	if strings.ToUpper(strings.TrimSpace(caseType.Status)) != model.CaseTypeStatusActive {
+		return CreateCaseResponse{}, fmt.Errorf("case_type %s v%d is not ACTIVE", caseType.Code, caseType.Version)
 	}
 
 	if len(caseType.Config.Stages) == 0 {
@@ -79,6 +104,7 @@ func CreateCase(
 	}
 
 	caseInstance := &model.CaseInstance{
+		TenantID:            tenantID,
 		CaseTypeID:          caseType.ID,
 		CaseTypeVersion:     caseType.Version,
 		CurrentStageCode:    &entryStage.Code,
@@ -108,7 +134,14 @@ func CreateCase(
 		return CreateCaseResponse{}, fmt.Errorf("failed to initialize case SLA: %w", err)
 	}
 
+	// Materialize document type definitions and create placeholder requests
+	// for requirements at the entry stage.
+	if err := materializeDocumentConfigAndRequests(ctx, tx, caseInstance.ID, *caseType, entryStage.Code); err != nil {
+		return CreateCaseResponse{}, fmt.Errorf("failed to initialize document requirements: %w", err)
+	}
+
 	slog.Info("case created",
+		"tenant_id", tenantID,
 		"case_id", caseInstance.ID,
 		"reference_number", caseInstance.ReferenceNumber,
 		"case_type", caseType.Code,
@@ -173,6 +206,7 @@ func CreateCase(
 	if err := tx.Commit(ctx); err != nil {
 		return CreateCaseResponse{}, fmt.Errorf("failed to commit: %w", err)
 	}
+	multitenancy.IncCasesCreated(tenantID, caseType.Code)
 
 	return CreateCaseResponse{
 		CaseID:          caseInstance.ID,
@@ -217,6 +251,7 @@ func CreateSubCases(
 		}
 
 		subCase := &model.CaseInstance{
+			TenantID:            parentCase.TenantID,
 			CaseTypeID:          subCaseType.ID,
 			CaseTypeVersion:     subCaseType.Version,
 			ParentCaseID:        &parentCase.ID,
@@ -303,4 +338,218 @@ func applyCaseSLAAtCreation(
 	}
 
 	return nil
+}
+
+func materializeDocumentConfigAndRequests(
+	ctx context.Context,
+	tx repository.DBExecutor,
+	caseID string,
+	caseType model.CaseType,
+	entryStageCode string,
+) error {
+	for _, definition := range caseType.Config.DocumentTypes {
+		documentTypeCode := strings.TrimSpace(definition.DocumentTypeCode)
+		if documentTypeCode == "" {
+			return fmt.Errorf("materializeDocumentConfigAndRequests: document_type_code is required")
+		}
+		allowedExtensions := normalizeExtensions(definition.AllowedExtensions)
+		if len(allowedExtensions) == 0 {
+			return fmt.Errorf("materializeDocumentConfigAndRequests: allowed_extensions is required for %s", documentTypeCode)
+		}
+
+		maxSizeMB := definition.MaxSizeMB
+		if maxSizeMB <= 0 {
+			maxSizeMB = 10
+		}
+		requiredCountMin := definition.RequiredCountMin
+		if requiredCountMin <= 0 {
+			requiredCountMin = 1
+		}
+		requiredCountMax := definition.RequiredCountMax
+		if requiredCountMax <= 0 || requiredCountMax < requiredCountMin {
+			requiredCountMax = requiredCountMin
+		}
+		retentionDays := definition.RetentionDays
+		if retentionDays <= 0 {
+			retentionDays = 2555
+		}
+		retentionPolicy := strings.ToUpper(strings.TrimSpace(definition.RetentionPolicy))
+		if retentionPolicy == "" {
+			retentionPolicy = "ARCHIVE"
+		}
+
+		allowedViewers := normalizeRoles(definition.AllowedViewers)
+		if len(allowedViewers) == 0 {
+			allowedViewers = []string{"PUBLIC"}
+		}
+
+		var requiredAtStage interface{}
+		if stage := strings.TrimSpace(definition.RequiredAtStage); stage != "" {
+			requiredAtStage = stage
+		}
+		var verificationRole interface{}
+		if definition.RequiresVerification {
+			role := strings.TrimSpace(definition.VerificationRole)
+			if role == "" {
+				role = "DOCUMENT_REVIEWER"
+			}
+			verificationRole = role
+		}
+
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO document_types (
+				case_type_code,
+				case_type_version,
+				document_type_code,
+				display_name,
+				description,
+				allowed_extensions,
+				max_size_mb,
+				required_at_stage,
+				required_count_min,
+				required_count_max,
+				is_sensitive,
+				requires_verification,
+				verification_role,
+				retention_days,
+				retention_policy,
+				allowed_viewers
+			)
+			VALUES (
+				$1,
+				$2,
+				$3,
+				$4,
+				$5,
+				$6,
+				$7,
+				$8,
+				$9,
+				$10,
+				$11,
+				$12,
+				$13,
+				$14,
+				$15,
+				$16
+			)
+			ON CONFLICT (case_type_code, case_type_version, document_type_code)
+			DO UPDATE SET
+				display_name = EXCLUDED.display_name,
+				description = EXCLUDED.description,
+				allowed_extensions = EXCLUDED.allowed_extensions,
+				max_size_mb = EXCLUDED.max_size_mb,
+				required_at_stage = EXCLUDED.required_at_stage,
+				required_count_min = EXCLUDED.required_count_min,
+				required_count_max = EXCLUDED.required_count_max,
+				is_sensitive = EXCLUDED.is_sensitive,
+				requires_verification = EXCLUDED.requires_verification,
+				verification_role = EXCLUDED.verification_role,
+				retention_days = EXCLUDED.retention_days,
+				retention_policy = EXCLUDED.retention_policy,
+				allowed_viewers = EXCLUDED.allowed_viewers,
+				updated_at = now()
+		`,
+			caseType.Code,
+			caseType.Version,
+			documentTypeCode,
+			strings.TrimSpace(definition.DisplayName),
+			blankToNil(definition.Description),
+			allowedExtensions,
+			maxSizeMB,
+			requiredAtStage,
+			requiredCountMin,
+			requiredCountMax,
+			definition.IsSensitive,
+			definition.RequiresVerification,
+			verificationRole,
+			retentionDays,
+			retentionPolicy,
+			allowedViewers,
+		); err != nil {
+			return fmt.Errorf("materializeDocumentConfigAndRequests: upsert %s: %w", documentTypeCode, err)
+		}
+	}
+
+	if strings.TrimSpace(entryStageCode) == "" {
+		return nil
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO document_requests (
+			case_id,
+			case_type_code,
+			case_type_version,
+			document_type_code,
+			required_at_stage,
+			required_count_min,
+			required_count_max,
+			current_count,
+			status,
+			requested_at
+		)
+		SELECT
+			$1::uuid,
+			dt.case_type_code,
+			dt.case_type_version,
+			dt.document_type_code,
+			dt.required_at_stage,
+			dt.required_count_min,
+			dt.required_count_max,
+			0,
+			'PENDING',
+			now()
+		FROM document_types dt
+		WHERE dt.case_type_code = $2
+		  AND dt.case_type_version = $3
+		  AND dt.required_at_stage = $4
+		  AND dt.required_count_min > 0
+		ON CONFLICT (case_id, document_type_code, required_at_stage)
+		DO NOTHING
+	`, caseID, caseType.Code, caseType.Version, entryStageCode); err != nil {
+		return fmt.Errorf("materializeDocumentConfigAndRequests: insert requests: %w", err)
+	}
+	return nil
+}
+
+func normalizeExtensions(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		value = strings.TrimSpace(strings.ToLower(strings.TrimPrefix(value, ".")))
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func normalizeRoles(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		role := strings.ToUpper(strings.TrimSpace(value))
+		if role == "" {
+			continue
+		}
+		if _, ok := seen[role]; ok {
+			continue
+		}
+		seen[role] = struct{}{}
+		out = append(out, role)
+	}
+	return out
+}
+
+func blankToNil(value string) interface{} {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	return value
 }

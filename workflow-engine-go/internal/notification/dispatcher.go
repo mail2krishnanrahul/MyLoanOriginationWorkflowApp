@@ -246,7 +246,7 @@ func (d *NotificationDispatcher) pollPendingNotifications(ctx context.Context, t
 			END DESC,
 			q.scheduled_at ASC
 		LIMIT $2
-		FOR UPDATE SKIP LOCKED
+		FOR UPDATE OF q SKIP LOCKED
 	`, d.maxRetries, d.batchSize)
 	if err != nil {
 		return nil, err

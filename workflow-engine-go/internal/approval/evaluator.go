@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"math"
 	"time"
 
 	"workflow-engine/pkg/model"
@@ -35,13 +34,13 @@ func NewApprovalPolicyEvaluator(db *sqlx.DB, logger *slog.Logger, publisher Even
 }
 
 type gateSnapshot struct {
-	ID                    string                `db:"id"`
-	CaseID                string                `db:"case_id"`
-	TaskID                string                `db:"task_id"`
-	ApprovalPolicy        model.ApprovalPolicy  `db:"approval_policy"`
-	RequiredApproverCount int                   `db:"required_approver_count"`
+	ID                    string                   `db:"id"`
+	CaseID                string                   `db:"case_id"`
+	TaskID                string                   `db:"task_id"`
+	ApprovalPolicy        model.ApprovalPolicy     `db:"approval_policy"`
+	RequiredApproverCount int                      `db:"required_approver_count"`
 	GateStatus            model.ApprovalGateStatus `db:"gate_status"`
-	Version               int                   `db:"version"`
+	Version               int                      `db:"version"`
 }
 
 type requestCounts struct {
@@ -281,12 +280,12 @@ func (e *ApprovalPolicyEvaluator) publishGateEvent(
 	reason string,
 ) error {
 	payload, err := json.Marshal(ApprovalEventPayload{
-		GateID:      gate.ID,
-		CaseID:      gate.CaseID,
-		TaskID:      gate.TaskID,
-		Policy:      gate.ApprovalPolicy,
-		GateStatus:  status,
-		Reason:      reason,
+		GateID:       gate.ID,
+		CaseID:       gate.CaseID,
+		TaskID:       gate.TaskID,
+		Policy:       gate.ApprovalPolicy,
+		GateStatus:   status,
+		Reason:       reason,
 		DecisionText: fmt.Sprintf("approved=%d rejected=%d pending=%d total=%d", counts.Approved, counts.Rejected, counts.Pending, counts.Total),
 	})
 	if err != nil {
@@ -318,13 +317,13 @@ func (e *ApprovalPolicyEvaluator) EvaluateApprovalChain(
 	}
 
 	type chainSnapshot struct {
-		ID                      string                   `db:"id"`
-		CaseID                  string                   `db:"case_id"`
-		ApprovalGateID          string                   `db:"approval_gate_id"`
-		ApprovalChainDefinition json.RawMessage          `db:"approval_chain_definition"`
-		CurrentTier             int                      `db:"current_tier"`
+		ID                      string                        `db:"id"`
+		CaseID                  string                        `db:"case_id"`
+		ApprovalGateID          string                        `db:"approval_gate_id"`
+		ApprovalChainDefinition json.RawMessage               `db:"approval_chain_definition"`
+		CurrentTier             int                           `db:"current_tier"`
 		TierStatus              model.ApprovalChainTierStatus `db:"tier_status"`
-		ChainStatus             model.ApprovalChainStatus `db:"chain_status"`
+		ChainStatus             model.ApprovalChainStatus     `db:"chain_status"`
 	}
 	var chain chainSnapshot
 	if err := tx.GetContext(ctx, &chain, `
@@ -602,14 +601,6 @@ func nextTierValue(tiers []model.ApprovalChainTierDefinition, index int) int {
 		return tiers[len(tiers)-1].Tier
 	}
 	return tiers[index+1].Tier
-}
-
-// computeConsensusRequired returns minimum approvals needed to exceed 66%.
-func computeConsensusRequired(total int) int {
-	if total <= 0 {
-		return 0
-	}
-	return int(math.Floor(float64(total)*0.66)) + 1
 }
 
 // GetGateStatus fetches gate status for external checks.

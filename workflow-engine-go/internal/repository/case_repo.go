@@ -17,7 +17,7 @@ func (r *Repository) GetCaseInstance(ctx context.Context, tx DBExecutor, caseID 
 	}
 	var c model.CaseInstance
 	err := tx.QueryRow(ctx, `
-		SELECT id, reference_number, case_type_id, case_type_version,
+		SELECT id, tenant_id::text AS tenant_id, reference_number, case_type_id, case_type_version,
 		       parent_case_id, source_case_id, current_stage_code, current_stage_ordinal,
 		       status, metadata, assigned_to, rework_count, max_rework_attempts, row_version,
 		       created_at, updated_at, completed_at,
@@ -26,7 +26,7 @@ func (r *Repository) GetCaseInstance(ctx context.Context, tx DBExecutor, caseID 
 		FROM cases
 		WHERE id = $1::uuid`, caseID,
 	).Scan(
-		&c.ID, &c.ReferenceNumber, &c.CaseTypeID, &c.CaseTypeVersion,
+		&c.ID, &c.TenantID, &c.ReferenceNumber, &c.CaseTypeID, &c.CaseTypeVersion,
 		&c.ParentCaseID, &c.SourceCaseID, &c.CurrentStageCode, &c.CurrentStageOrdinal,
 		&c.Status, &c.Metadata, &c.AssignedTo, &c.ReworkCount, &c.MaxReworkAttempts, &c.RowVersion,
 		&c.CreatedAt, &c.UpdatedAt, &c.CompletedAt,
@@ -47,7 +47,7 @@ func (r *Repository) GetCaseInstanceWithLock(ctx context.Context, tx DBExecutor,
 	}
 	var c model.CaseInstance
 	err := tx.QueryRow(ctx, `
-		SELECT id, reference_number, case_type_id, case_type_version,
+		SELECT id, tenant_id::text AS tenant_id, reference_number, case_type_id, case_type_version,
 		       parent_case_id, source_case_id, current_stage_code, current_stage_ordinal,
 		       status, metadata, assigned_to, rework_count, max_rework_attempts, row_version,
 		       created_at, updated_at, completed_at,
@@ -57,7 +57,7 @@ func (r *Repository) GetCaseInstanceWithLock(ctx context.Context, tx DBExecutor,
 		WHERE id = $1::uuid
 		FOR UPDATE`, caseID,
 	).Scan(
-		&c.ID, &c.ReferenceNumber, &c.CaseTypeID, &c.CaseTypeVersion,
+		&c.ID, &c.TenantID, &c.ReferenceNumber, &c.CaseTypeID, &c.CaseTypeVersion,
 		&c.ParentCaseID, &c.SourceCaseID, &c.CurrentStageCode, &c.CurrentStageOrdinal,
 		&c.Status, &c.Metadata, &c.AssignedTo, &c.ReworkCount, &c.MaxReworkAttempts, &c.RowVersion,
 		&c.CreatedAt, &c.UpdatedAt, &c.CompletedAt,
@@ -165,12 +165,13 @@ func (r *Repository) CloneCase(ctx context.Context, tx DBExecutor, sourceCaseID 
 	var newCaseID string
 	err := tx.QueryRow(ctx, `
 		INSERT INTO cases (
-			case_type_id, case_type_version, parent_case_id, source_case_id,
+			tenant_id,
+			case_type_id, case_type_version, case_type_version_id, parent_case_id, source_case_id,
 			current_stage_code, current_stage_ordinal, status, metadata,
 			applicant_data
 		)
 		SELECT
-			case_type_id, case_type_version, parent_case_id, $1,
+			tenant_id, case_type_id, case_type_version, COALESCE(case_type_version_id, case_type_id), parent_case_id, $1,
 			current_stage_code, current_stage_ordinal, 'CLONED', metadata,
 			COALESCE(applicant_data, '{}'::jsonb)
 		FROM cases

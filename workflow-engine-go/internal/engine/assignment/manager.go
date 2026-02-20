@@ -2,7 +2,6 @@ package assignment
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"workflow-engine/internal/repository"
@@ -261,9 +260,4 @@ func (m *Manager) ReassignTask(ctx context.Context, tx repository.DBExecutor, ta
 		"supervisor_id": supervisorID,
 		"reason":        reason,
 	})
-}
-
-// isErrNoEligibleWorker checks if the error is the sentinel for no candidates.
-func isErrNoEligibleWorker(err error) bool {
-	return errors.Is(err, model.ErrNoEligibleWorker)
 }

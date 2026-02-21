@@ -23,6 +23,7 @@ import (
 	"workflow-engine/internal/notification"
 	"workflow-engine/internal/reporting"
 	"workflow-engine/internal/repository"
+	"workflow-engine/internal/scim"
 	"workflow-engine/internal/sla"
 
 	"github.com/jmoiron/sqlx"
@@ -79,6 +80,10 @@ func main() {
 	approvalEvaluator := approval.NewApprovalPolicyEvaluator(sqlxDB, slog.Default(), nil)
 	approvalExpirySweepJob := approval.NewApprovalExpirySweepJob(sqlxDB, nil, approvalEvaluator, 1*time.Minute, 500, slog.Default())
 	tenantRateLimitCleanupJob := multitenancy.NewTenantRateLimitCleanupJob(sqlxDB, 1*time.Minute, 10000, slog.Default())
+	loginTracker := multitenancy.NewLoginTracker(sqlxDB, 30*time.Second, slog.Default())
+	multitenancy.SetLoginTracker(loginTracker)
+	scimTokenUsageTracker := scim.NewSCIMTokenUsageTracker(sqlxDB, 30*time.Second, slog.Default())
+	scim.SetSCIMTokenUsageTracker(scimTokenUsageTracker)
 	if ttlRaw := strings.TrimSpace(os.Getenv("TENANT_FEATURE_CACHE_TTL_SECONDS")); ttlRaw != "" {
 		if ttlSec, parseErr := strconv.Atoi(ttlRaw); parseErr == nil && ttlSec > 0 {
 			multitenancy.SetTenantFeatureCacheTTL(time.Duration(ttlSec) * time.Second)
@@ -169,13 +174,13 @@ func main() {
 	idempotencyCleanupJob := integration.NewIdempotencyKeyCleanupJob(sqlxDB, 24*time.Hour, 50000, slog.Default())
 	ingestedEventKeyCleanupJob := integration.NewIngestedEventKeyCleanupJob(sqlxDB, 24*time.Hour, 50000, slog.Default())
 
-	// Health Check Server
-	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+	// Root HTTP server
+	rootMux := http.NewServeMux()
+	rootMux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 	})
-	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+	rootMux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
 		if err := db.Pool.Ping(ctx); err != nil {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			w.Write([]byte(fmt.Sprintf("DB Unavailable: %v", err)))
@@ -185,13 +190,19 @@ func main() {
 		w.Write([]byte("Ready"))
 	})
 
+	apiMux := http.NewServeMux()
 	// Case management API
-	engine.RegisterCaseHandlers(mux, repo)
-	notification.RegisterNotificationHandlers(mux, sqlxDB, slog.Default())
+	engine.RegisterCaseHandlers(apiMux, repo)
+	notification.RegisterNotificationHandlers(apiMux, sqlxDB, slog.Default())
+
+	// Existing API remains tenant-header based.
+	rootMux.Handle("/", multitenancy.TenantMiddleware(sqlxDB, apiMux))
+	// SCIM router is mounted independently with its own middleware chain.
+	rootMux.Handle("/scim/v2/", scim.NewSCIMRouter(sqlxDB, slog.Default()))
 
 	srv := &http.Server{
 		Addr:    ":8080",
-		Handler: multitenancy.TenantMiddleware(sqlxDB, mux),
+		Handler: rootMux,
 	}
 
 	go func() {
@@ -216,6 +227,16 @@ func main() {
 	go notificationDispatcher.Start(ctx)
 	go metricsRefreshJob.Start(ctx)
 	go tenantRateLimitCleanupJob.Start(ctx)
+	go func() {
+		if err := loginTracker.Run(ctx); err != nil {
+			slog.Error("login tracker failed", "error", err)
+		}
+	}()
+	go func() {
+		if err := scimTokenUsageTracker.Run(ctx); err != nil {
+			slog.Error("scim token usage tracker failed", "error", err)
+		}
+	}()
 	go func() {
 		if err := webhookDispatcher.Run(ctx); err != nil {
 			slog.Error("webhook dispatcher failed", "error", err)

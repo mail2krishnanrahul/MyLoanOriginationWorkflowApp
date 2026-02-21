@@ -47,6 +47,24 @@ func TenantFromContext(ctx context.Context) (string, error) {
 	return "", ErrTenantNotFound
 }
 
+// UserIDFromContext extracts actor user id from common context keys.
+func UserIDFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	for _, key := range []string{"actor_user_id", "user_id", "userID", "x_user_id"} {
+		if v := ctx.Value(key); v != nil {
+			if userID, ok := v.(string); ok {
+				userID = strings.TrimSpace(userID)
+				if userID != "" {
+					return userID
+				}
+			}
+		}
+	}
+	return ""
+}
+
 // TenantFromPayload extracts tenant_id from event payload JSON.
 func TenantFromPayload(payload json.RawMessage) string {
 	if len(payload) == 0 {

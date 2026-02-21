@@ -44,6 +44,8 @@ func (r *Repository) ClaimTasks(ctx context.Context, service string, batchSize i
 		SELECT id, case_id, task_definition_code, activity_code, stage_code,
 		       tenant_id::text AS tenant_id,
 		       status, priority, assigned_service,
+		       assigned_user_id::text AS assigned_user_id,
+		       assigned_team_id::text AS assigned_team_id,
 		       assigned_at, started_at, completed_at, due_at,
 		       retry_count, max_retries,
 		       input_payload, output_payload, metadata, error_detail,
@@ -77,6 +79,7 @@ func (r *Repository) ClaimTasks(ctx context.Context, service string, batchSize i
 			&t.ID, &t.CaseID, &t.TaskDefinitionCode, &t.ActivityCode, &t.StageCode,
 			&t.TenantID,
 			&status, &priority, &t.AssignedService,
+			&t.AssignedUserID, &t.AssignedTeamID,
 			&t.AssignedAt, &t.StartedAt, &t.CompletedAt, &t.DueAt,
 			&t.RetryCount, &t.MaxRetries,
 			&t.InputPayload, &t.OutputPayload, &t.Metadata, &t.ErrorDetail,
@@ -97,17 +100,23 @@ func (r *Repository) ClaimTasks(ctx context.Context, service string, batchSize i
 		return nil, nil
 	}
 
+	var assignedUserID *string
+	if v := strings.TrimSpace(multitenancy.UserIDFromContext(ctx)); v != "" {
+		assignedUserID = &v
+	}
+
 	// 2. Atomically mark all selected tasks as ASSIGNED
 	_, err = tx.Exec(ctx, `
 		UPDATE tasks
 		SET status            = 'ASSIGNED',
 		    assigned_service  = $1,
+		    assigned_user_id  = COALESCE($4::uuid, assigned_user_id),
 		    assigned_at       = now(),
 		    last_heartbeat_at = now(),
 		    version           = version + 1
 		WHERE id = ANY($2::uuid[])
 		  AND tenant_id = $3::uuid`,
-		service, ids, tenantID,
+		service, ids, tenantID, assignedUserID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to mark tasks as ASSIGNED: %w", err)
@@ -122,6 +131,7 @@ func (r *Repository) ClaimTasks(ctx context.Context, service string, batchSize i
 	for i := range tasks {
 		tasks[i].Status = model.TaskStatusAssigned
 		tasks[i].AssignedService = &service
+		tasks[i].AssignedUserID = assignedUserID
 		tasks[i].AssignedAt = &now
 		multitenancy.IncTasksClaimed(tenantID, service)
 	}
@@ -141,6 +151,7 @@ func (r *Repository) ReleaseTaskClaim(ctx context.Context, taskID string) error 
 		UPDATE tasks
 		SET status = 'PENDING',
 		    assigned_service = NULL,
+		    assigned_user_id = NULL,
 		    assigned_at = NULL,
 		    last_heartbeat_at = NULL,
 		    version = version + 1
@@ -196,6 +207,7 @@ func (r *Repository) ReclaimStaleTasks(ctx context.Context, staleDuration time.D
 		UPDATE tasks
 		SET status            = 'PENDING',
 		    assigned_service  = NULL,
+		    assigned_user_id  = NULL,
 		    assigned_at       = NULL,
 		    last_heartbeat_at = NULL,
 		    version           = version + 1
@@ -255,6 +267,7 @@ func (r *Repository) ScheduleRetry(ctx context.Context, tx DBExecutor, taskID st
 		    retry_count   = $1,
 		    next_retry_at = $2,
 		    assigned_service  = NULL,
+		    assigned_user_id  = NULL,
 		    assigned_at       = NULL,
 		    last_heartbeat_at = NULL,
 		    error_detail      = NULL,

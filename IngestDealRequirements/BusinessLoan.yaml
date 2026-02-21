@@ -1,0 +1,1225 @@
+openapi: 3.1.0
+info:
+  title: Westpac Business Lending Deals API
+  version: 2.0.0
+  description: |
+    Fully revised domain model for Westpac-aligned Business Lending Deals (Commercial / Agribusiness / Business One).
+    Key principles:
+      - A Deal has an Umbrella Limit.
+      - BorrowingEntity is a borrowing structure (DIRECT or TRUST) composed of liable Obligors.
+      - TRUST borrowing entities MUST include trustee(s) as liable obligors (service-enforced invariant).
+      - Facilities are nested under BorrowingEntities (not a separate top-level list).
+      - Security supports N:M Facility <-> Collateral via allocations; Collateral supports 1:N Assets.
+
+servers:
+  - url: https://api.westpac.example.com/business-lending
+
+tags:
+  - name: Deals
+  - name: Lifecycle
+
+paths:
+  /deals:
+    post:
+      tags: [Deals]
+      operationId: createDeal
+      summary: Create a new Business Lending Deal (draft)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BusinessLendingDealCreateRequest"
+      responses:
+        "201":
+          description: Deal created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BusinessLendingDeal"
+    get:
+      tags: [Deals]
+      operationId: listDeals
+      summary: List deals (basic search)
+      parameters:
+        - in: query
+          name: bankerId
+          schema: { type: string }
+        - in: query
+          name: status
+          schema: { $ref: "#/components/schemas/DealStatus" }
+        - in: query
+          name: customerReference
+          schema: { type: string }
+      responses:
+        "200":
+          description: Deal list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/BusinessLendingDealSummary"
+
+  /deals/{dealId}:
+    get:
+      tags: [Deals]
+      operationId: getDeal
+      summary: Retrieve a Deal
+      parameters:
+        - $ref: "#/components/parameters/DealId"
+      responses:
+        "200":
+          description: Deal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BusinessLendingDeal"
+    patch:
+      tags: [Deals]
+      operationId: patchDeal
+      summary: Patch deal metadata (non-credit changes)
+      parameters:
+        - $ref: "#/components/parameters/DealId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BusinessLendingDealPatchRequest"
+      responses:
+        "200":
+          description: Updated deal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BusinessLendingDeal"
+
+  /deals/{dealId}/lifecycle/new-money:
+    post:
+      tags: [Lifecycle]
+      operationId: submitNewMoney
+      summary: Submit NewMoney (create/increase limits, add facilities, security changes)
+      parameters:
+        - $ref: "#/components/parameters/DealId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewMoneyRequest"
+      responses:
+        "202":
+          description: NewMoney accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LifecycleOperationReceipt"
+
+  /deals/{dealId}/lifecycle/variations:
+    post:
+      tags: [Lifecycle]
+      operationId: submitVariation
+      summary: Submit Variation (limit/term/pricing/security changes)
+      parameters:
+        - $ref: "#/components/parameters/DealId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VariationRequest"
+      responses:
+        "202":
+          description: Variation accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LifecycleOperationReceipt"
+
+  /deals/{dealId}/lifecycle/closures:
+    post:
+      tags: [Lifecycle]
+      operationId: submitClosure
+      summary: Submit Closure (facility closure or deal closure)
+      parameters:
+        - $ref: "#/components/parameters/DealId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClosureRequest"
+      responses:
+        "202":
+          description: Closure accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LifecycleOperationReceipt"
+
+components:
+  parameters:
+    DealId:
+      name: dealId
+      in: path
+      required: true
+      schema: { type: string }
+
+  schemas:
+    # --------------------------
+    # Common primitives
+    # --------------------------
+    ISODate:
+      type: string
+      format: date
+      examples: ["2026-02-21"]
+
+    ISODateTime:
+      type: string
+      format: date-time
+
+    Money:
+      type: object
+      additionalProperties: false
+      required: [amount, currency]
+      properties:
+        amount:
+          type: number
+          multipleOf: 0.01
+        currency:
+          type: string
+          enum: [AUD]
+
+    Percentage:
+      type: number
+      multipleOf: 0.0001
+      description: Decimal rate, e.g. 0.0725 for 7.25%
+
+    AustralianState:
+      type: string
+      enum: [NSW, VIC, QLD, SA, WA, TAS, ACT, NT]
+
+    DealStatus:
+      type: string
+      enum: [DRAFT, SUBMITTED, DOCUMENT_VERIFICATION,FULFILMENT, SETTTlEMENT_IN_PROGRESS, APPROVED, DECLINED, SETTLED, CLOSED]
+
+    FacilityStatus:
+      type: string
+      enum: [DRAFT, ACTIVE, SETTLED, CLOSED]
+
+    LifecycleOperationType:
+      type: string
+      enum: [NEW_MONEY, VARIATION, CLOSURE]
+
+    # --------------------------
+    # Deal summary
+    # --------------------------
+    BusinessLendingDealSummary:
+      type: object
+      additionalProperties: false
+      required: [dealId, dealName, status, createdAt]
+      properties:
+        dealId: { type: string }
+        dealName: { type: string }
+        status: { $ref: "#/components/schemas/DealStatus" }
+        bankerId: { type: string }
+        createdAt: { $ref: "#/components/schemas/ISODateTime" }
+
+    # --------------------------
+    # Deal root
+    # --------------------------
+    BusinessLendingDeal:
+      type: object
+      additionalProperties: false
+      required:
+        - dealId
+        - dealName
+        - status
+        - banker
+        - umbrellaLimit
+        - legalParties
+        - trustStructures
+        - borrowingEntities
+        - security
+        - lifecycleHistory
+        - createdAt
+      properties:
+        dealId: { type: string }
+        dealName: { type: string }
+        status: { $ref: "#/components/schemas/DealStatus" }
+
+        banker: { $ref: "#/components/schemas/BankerContext" }
+        customerReference:
+          type: string
+          description: External reference (CRM / customer group id)
+
+        umbrellaLimit: { $ref: "#/components/schemas/UmbrellaLimit" }
+
+        legalParties:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/LegalParty" }
+
+        trustStructures:
+          type: array
+          items: { $ref: "#/components/schemas/TrustStructure" }
+
+        borrowingEntities:
+          type: array
+          minItems: 1
+          description: |
+            Borrowing structures used in facilities. Facilities are nested here.
+            TRUST borrowing entities must include trustee(s) as liable obligors (service validation).
+          items: { $ref: "#/components/schemas/BorrowingEntity" }
+
+        security: { $ref: "#/components/schemas/DealSecurity" }
+
+        lifecycleHistory:
+          type: array
+          items: { $ref: "#/components/schemas/LifecycleOperationRecord" }
+
+        notes: { type: string }
+
+        createdAt: { $ref: "#/components/schemas/ISODateTime" }
+        updatedAt: { $ref: "#/components/schemas/ISODateTime" }
+
+    BusinessLendingDealCreateRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - dealName
+        - banker
+        - umbrellaLimit
+        - legalParties
+        - borrowingEntities
+        - security
+      properties:
+        dealName: { type: string }
+        banker: { $ref: "#/components/schemas/BankerContext" }
+        customerReference: { type: string }
+
+        umbrellaLimit: { $ref: "#/components/schemas/UmbrellaLimitCreate" }
+
+        legalParties:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/LegalParty" }
+
+        trustStructures:
+          type: array
+          items: { $ref: "#/components/schemas/TrustStructure" }
+
+        borrowingEntities:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/BorrowingEntityCreateRequest" }
+
+        security: { $ref: "#/components/schemas/DealSecurityCreate" }
+
+        notes: { type: string }
+
+    BusinessLendingDealPatchRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        dealName: { type: string }
+        notes: { type: string }
+        customerReference: { type: string }
+
+    BankerContext:
+      type: object
+      additionalProperties: false
+      required: [bankerId, channel, portfolio]
+      properties:
+        bankerId: { type: string }
+        channel:
+          type: string
+          enum: [BUSINESS_BANKING, AGRIBUSINESS, COMMERCIAL, INSTITUTIONAL]
+        portfolio:
+          type: string
+          description: e.g., "Sydney CBD Commercial", "NSW Agribusiness"
+
+    # --------------------------
+    # Umbrella limit
+    # --------------------------
+    UmbrellaLimit:
+      type: object
+      additionalProperties: false
+      required: [umbrellaLimitId, approvedLimit, currentUtilisation, availableHeadroom, exposureMethod]
+      properties:
+        umbrellaLimitId: { type: string }
+        approvedLimit: { $ref: "#/components/schemas/Money" }
+        currentUtilisation: { $ref: "#/components/schemas/Money" }
+        availableHeadroom: { $ref: "#/components/schemas/Money" }
+        exposureMethod:
+          type: string
+          enum: [GROSS, NET_OF_CASH, INTERNAL_RULES]
+        lastReconciledAt: { $ref: "#/components/schemas/ISODateTime" }
+
+    UmbrellaLimitCreate:
+      type: object
+      additionalProperties: false
+      required: [approvedLimit, exposureMethod]
+      properties:
+        approvedLimit: { $ref: "#/components/schemas/Money" }
+        exposureMethod:
+          type: string
+          enum: [GROSS, NET_OF_CASH, INTERNAL_RULES]
+
+    # --------------------------
+    # Address/contact/regulatory
+    # --------------------------
+    ContactDetails:
+      type: object
+      additionalProperties: false
+      properties:
+        email: { type: string, format: email }
+        phone: { type: string }
+        address: { $ref: "#/components/schemas/AustralianAddress" }
+
+    AustralianAddress:
+      type: object
+      additionalProperties: false
+      required: [line1, suburb, state, postcode, country]
+      properties:
+        line1: { type: string }
+        line2: { type: string }
+        suburb: { type: string }
+        state: { $ref: "#/components/schemas/AustralianState" }
+        postcode:
+          type: string
+          pattern: "^[0-9]{4}$"
+        country:
+          type: string
+          enum: [AU]
+
+    RegulatoryIdentifiers:
+      type: object
+      additionalProperties: false
+      properties:
+        abn:
+          type: string
+          description: Australian Business Number (11 digits, may include spaces)
+        acn:
+          type: string
+          description: Australian Company Number (9 digits)
+        tfn:
+          type: string
+          description: TFN (sensitive; tokenise/store per policy)
+        tfnStatus:
+          type: string
+          enum: [PROVIDED, EXEMPT, NOT_PROVIDED]
+        gstRegistered:
+          type: boolean
+
+    # --------------------------
+    # Legal parties (ONLY Individual/Company)
+    # --------------------------
+    LegalParty:
+      oneOf:
+        - $ref: "#/components/schemas/IndividualParty"
+        - $ref: "#/components/schemas/CompanyParty"
+      discriminator:
+        propertyName: partyType
+        mapping:
+          INDIVIDUAL: "#/components/schemas/IndividualParty"
+          COMPANY: "#/components/schemas/CompanyParty"
+
+    PartyBase:
+      type: object
+      additionalProperties: false
+      required: [partyId, partyType, legalName, regulatory]
+      properties:
+        partyId:
+          type: string
+          description: Stable deal-scoped identifier for a legal person.
+        partyType:
+          type: string
+          enum: [INDIVIDUAL, COMPANY]
+        legalName: { type: string }
+        contact: { $ref: "#/components/schemas/ContactDetails" }
+        regulatory: { $ref: "#/components/schemas/RegulatoryIdentifiers" }
+
+        roles:
+          type: array
+          items:
+            type: string
+            enum:
+              - DIRECTOR
+              - GUARANTOR
+              - SECURITY_PROVIDER
+              - OTHER
+
+    IndividualParty:
+      allOf:
+        - $ref: "#/components/schemas/PartyBase"
+        - type: object
+          additionalProperties: false
+          required: [partyType, dateOfBirth, name]
+          properties:
+            partyType: { type: string, const: INDIVIDUAL }
+            dateOfBirth: { $ref: "#/components/schemas/ISODate" }
+            name:
+              type: object
+              additionalProperties: false
+              required: [givenName, familyName]
+              properties:
+                givenName: { type: string }
+                middleName: { type: string }
+                familyName: { type: string }
+
+    CompanyParty:
+      allOf:
+        - $ref: "#/components/schemas/PartyBase"
+        - type: object
+          additionalProperties: false
+          required: [partyType, companyType, regulatory]
+          properties:
+            partyType: { type: string, const: COMPANY }
+            companyType:
+              type: string
+              enum: [PTY_LTD, LTD, PARTNERSHIP, SOLE_TRADER, OTHER]
+            regulatory:
+              allOf: [{ $ref: "#/components/schemas/RegulatoryIdentifiers" }]
+              required: [abn, acn]
+
+    # --------------------------
+    # Trust structures
+    # --------------------------
+    TrustStructure:
+      type: object
+      additionalProperties: false
+      required: [trustId, trustName, trustType, trustees]
+      properties:
+        trustId: { type: string }
+        trustName: { type: string }
+        trustType:
+          type: string
+          enum: [FAMILY, UNIT, DISCRETIONARY, HYBRID, SMSF, OTHER]
+        trustDeedDate: { $ref: "#/components/schemas/ISODate" }
+        trustees:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/TrusteeRef" }
+        appointor:
+          type: string
+          description: Optional; commonly relevant for discretionary trusts.
+        regulatory:
+          type: object
+          additionalProperties: false
+          properties:
+            tfn:
+              type: string
+              description: TFN (sensitive; tokenise/store per policy)
+            tfnStatus:
+              type: string
+              enum: [PROVIDED, EXEMPT, NOT_PROVIDED]
+
+    TrusteeRef:
+      type: object
+      additionalProperties: false
+      required: [partyId, trusteeType, capacityStatement]
+      properties:
+        partyId:
+          type: string
+          description: References LegalParty.partyId
+        trusteeType:
+          type: string
+          enum: [INDIVIDUAL_TRUSTEE, CORPORATE_TRUSTEE]
+        capacityStatement:
+          type: string
+          description: e.g. "XYZ Pty Ltd ATF The Smith Family Trust"
+
+    # --------------------------
+    # Borrowing Entity (obligor set) WITH nested facilities
+    # --------------------------
+    BorrowingEntity:
+      oneOf:
+        - $ref: "#/components/schemas/DirectBorrowingEntity"
+        - $ref: "#/components/schemas/TrustBorrowingEntity"
+      discriminator:
+        propertyName: borrowingEntityType
+        mapping:
+          DIRECT: "#/components/schemas/DirectBorrowingEntity"
+          TRUST: "#/components/schemas/TrustBorrowingEntity"
+
+    BorrowingEntityBase:
+      type: object
+      additionalProperties: false
+      required: [borrowingEntityId, borrowingEntityType, displayName, obligors, facilities]
+      properties:
+        borrowingEntityId:
+          type: string
+          description: Borrowing structure id referenced by security allocations.
+        borrowingEntityType:
+          type: string
+          enum: [DIRECT, TRUST]
+        displayName:
+          type: string
+          description: Banker-friendly label.
+
+        obligors:
+          type: array
+          minItems: 1
+          description: |
+            Liable parties for this borrowing structure.
+            For TRUST borrowing entities: MUST include trustee(s) as obligors with capacity=AS_TRUSTEE.
+          items:
+            $ref: "#/components/schemas/Obligor"
+
+        facilities:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/CreditFacility"
+
+    BorrowingEntityCreateRequest:
+      oneOf:
+        - $ref: "#/components/schemas/DirectBorrowingEntityCreate"
+        - $ref: "#/components/schemas/TrustBorrowingEntityCreate"
+      discriminator:
+        propertyName: borrowingEntityType
+        mapping:
+          DIRECT: "#/components/schemas/DirectBorrowingEntityCreate"
+          TRUST: "#/components/schemas/TrustBorrowingEntityCreate"
+
+    ObligorsMustIncludeTrusteesNote:
+      type: string
+      description: Informational only. Cross-object trustee->obligor enforcement is performed by service rules.
+
+    Obligor:
+      type: object
+      additionalProperties: false
+      required: [partyId, liabilityType, capacity]
+      properties:
+        partyId:
+          type: string
+          description: References LegalParty.partyId
+        liabilityType:
+          type: string
+          enum: [JOINT_AND_SEVERAL, SEVERAL, LIMITED]
+        limitedAmount:
+          $ref: "#/components/schemas/Money"
+        capacity:
+          type: string
+          enum: [IN_OWN_RIGHT, AS_TRUSTEE]
+        capacityStatement:
+          type: string
+          description: Required if capacity=AS_TRUSTEE
+
+    DirectBorrowingEntity:
+      allOf:
+        - $ref: "#/components/schemas/BorrowingEntityBase"
+        - type: object
+          additionalProperties: false
+          required: [borrowingEntityType]
+          properties:
+            borrowingEntityType: { type: string, const: DIRECT }
+
+    TrustBorrowingEntity:
+      allOf:
+        - $ref: "#/components/schemas/BorrowingEntityBase"
+        - type: object
+          additionalProperties: false
+          required: [borrowingEntityType, trustId]
+          properties:
+            borrowingEntityType: { type: string, const: TRUST }
+            trustId:
+              type: string
+              description: References TrustStructure.trustId
+
+    DirectBorrowingEntityCreate:
+      allOf:
+        - $ref: "#/components/schemas/BorrowingEntityBaseCreate"
+        - type: object
+          additionalProperties: false
+          required: [borrowingEntityType]
+          properties:
+            borrowingEntityType: { type: string, const: DIRECT }
+
+    TrustBorrowingEntityCreate:
+      allOf:
+        - $ref: "#/components/schemas/BorrowingEntityBaseCreate"
+        - type: object
+          additionalProperties: false
+          required: [borrowingEntityType, trustId]
+          properties:
+            borrowingEntityType: { type: string, const: TRUST }
+            trustId: { type: string }
+
+    BorrowingEntityBaseCreate:
+      type: object
+      additionalProperties: false
+      required: [borrowingEntityId, borrowingEntityType, displayName, obligors, facilities]
+      properties:
+        borrowingEntityId: { type: string }
+        borrowingEntityType:
+          type: string
+          enum: [DIRECT, TRUST]
+        displayName: { type: string }
+        obligors:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/Obligor" }
+        facilities:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/CreditFacilityCreateRequest" }
+
+    # --------------------------
+    # Facilities (now nested)
+    # --------------------------
+    CreditFacility:
+      type: object
+      additionalProperties: false
+      required:
+        - facilityId
+        - product
+        - status
+        - facilityLimit
+        - umbrellaConsumption
+        - pricing
+        - term
+        - repayment
+        - guarantees
+      properties:
+        facilityId: { type: string }
+
+        product: { $ref: "#/components/schemas/WestpacFacilityProduct" }
+
+        status: { $ref: "#/components/schemas/FacilityStatus" }
+
+        purpose:
+          type: string
+          description: Lending purpose narrative
+
+        facilityLimit: { $ref: "#/components/schemas/Money" }
+
+        umbrellaConsumption: { $ref: "#/components/schemas/UmbrellaConsumption" }
+
+        pricing: { $ref: "#/components/schemas/Pricing" }
+
+        term: { $ref: "#/components/schemas/FacilityTerm" }
+
+        repayment: { $ref: "#/components/schemas/RepaymentProfile" }
+
+        guarantees:
+          type: array
+          items: { $ref: "#/components/schemas/Guarantee" }
+
+        settledAt: { $ref: "#/components/schemas/ISODateTime" }
+        closedAt: { $ref: "#/components/schemas/ISODateTime" }
+
+    CreditFacilityCreateRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - product
+        - facilityLimit
+        - umbrellaConsumption
+        - pricing
+        - term
+        - repayment
+      properties:
+        product: { $ref: "#/components/schemas/WestpacFacilityProduct" }
+        purpose: { type: string }
+        facilityLimit: { $ref: "#/components/schemas/Money" }
+        umbrellaConsumption: { $ref: "#/components/schemas/UmbrellaConsumptionCreate" }
+        pricing: { $ref: "#/components/schemas/Pricing" }
+        term: { $ref: "#/components/schemas/FacilityTerm" }
+        repayment: { $ref: "#/components/schemas/RepaymentProfile" }
+        guarantees:
+          type: array
+          items: { $ref: "#/components/schemas/Guarantee" }
+
+    WestpacFacilityProduct:
+      type: string
+      description: Westpac-aligned business lending product families.
+      enum:
+        - BUSINESS_ONE_LOAN
+        - BUSINESS_ONE_OVERDRAFT
+        - EQUIPMENT_FINANCE
+        - COMMERCIAL_PROPERTY_FINANCE
+        - AGRIBUSINESS_LOAN
+        - INVOICE_FINANCE
+        - TRADE_FINANCE
+        - BANK_GUARANTEE
+        - OTHER
+
+    UmbrellaConsumption:
+      type: object
+      additionalProperties: false
+      required: [consumptionAmount, rationale]
+      properties:
+        consumptionAmount: { $ref: "#/components/schemas/Money" }
+        rationale:
+          type: string
+          description: Why umbrella consumption differs from facility limit (e.g., net of cash collateral)
+
+    UmbrellaConsumptionCreate:
+      type: object
+      additionalProperties: false
+      required: [consumptionAmount, rationale]
+      properties:
+        consumptionAmount: { $ref: "#/components/schemas/Money" }
+        rationale: { type: string }
+
+    Pricing:
+      type: object
+      additionalProperties: false
+      required: [interestRate, rateType]
+      properties:
+        rateType:
+          type: string
+          enum: [VARIABLE, FIXED, MIXED]
+        interestRate: { $ref: "#/components/schemas/Percentage" }
+        margin: { $ref: "#/components/schemas/Percentage" }
+        index:
+          type: string
+          enum: [BBSY, CASH_RATE, PRIME, OTHER]
+        fees:
+          type: array
+          items: { $ref: "#/components/schemas/Fee" }
+
+    Fee:
+      type: object
+      additionalProperties: false
+      required: [feeType, amount]
+      properties:
+        feeType:
+          type: string
+          enum: [ESTABLISHMENT, LINE_FEE, ANNUAL_REVIEW, DISCHARGE, OTHER]
+        amount: { $ref: "#/components/schemas/Money" }
+
+    FacilityTerm:
+      type: object
+      additionalProperties: false
+      required: [startDate, endDate]
+      properties:
+        startDate: { $ref: "#/components/schemas/ISODate" }
+        endDate: { $ref: "#/components/schemas/ISODate" }
+        termMonths:
+          type: integer
+          minimum: 1
+
+    RepaymentProfile:
+      type: object
+      additionalProperties: false
+      required: [repaymentType]
+      properties:
+        repaymentType:
+          type: string
+          enum: [INTEREST_ONLY, PRINCIPAL_AND_INTEREST, REVOLVING, BULLET]
+        frequency:
+          type: string
+          enum: [WEEKLY, FORTNIGHTLY, MONTHLY, QUARTERLY, ANNUAL, AT_MATURITY]
+        amortisationMonths:
+          type: integer
+          minimum: 0
+
+    # --------------------------
+    # Guarantees
+    # --------------------------
+    Guarantee:
+      type: object
+      additionalProperties: false
+      required: [guaranteeType, guarantor, scope]
+      properties:
+        guaranteeType:
+          type: string
+          enum: [DIRECTORS_GUARANTEE, RELATED_ENTITY_GUARANTEE, THIRD_PARTY_GUARANTEE]
+        guarantor:
+          $ref: "#/components/schemas/Guarantor"
+        scope:
+          type: string
+          enum: [ALL_MONEYS, LIMITED]
+        limitedAmount: { $ref: "#/components/schemas/Money" }
+        notes: { type: string }
+
+    Guarantor:
+      oneOf:
+        - $ref: "#/components/schemas/ExistingPartyGuarantor"
+        - $ref: "#/components/schemas/ExternalGuarantor"
+      discriminator:
+        propertyName: guarantorType
+        mapping:
+          EXISTING_PARTY: "#/components/schemas/ExistingPartyGuarantor"
+          EXTERNAL: "#/components/schemas/ExternalGuarantor"
+
+    ExistingPartyGuarantor:
+      type: object
+      additionalProperties: false
+      required: [guarantorType, partyId, relationshipToBorrower]
+      properties:
+        guarantorType: { type: string, const: EXISTING_PARTY }
+        partyId:
+          type: string
+          description: References LegalParty.partyId
+        relationshipToBorrower:
+          type: string
+          enum: [DIRECTOR, SHAREHOLDER, TRUSTEE, RELATED_ENTITY, SPOUSE, OTHER]
+
+    ExternalGuarantor:
+      type: object
+      additionalProperties: false
+      required: [guarantorType, name]
+      properties:
+        guarantorType: { type: string, const: EXTERNAL }
+        name: { type: string }
+        contact: { $ref: "#/components/schemas/ContactDetails" }
+
+    # --------------------------
+    # Security: collateral + assets + allocations
+    # NOTE: allocations reference facilityId and borrowingEntityId to disambiguate nested facility ids.
+    # --------------------------
+    DealSecurity:
+      type: object
+      additionalProperties: false
+      required: [secured, collaterals, facilityAllocations]
+      properties:
+        secured:
+          type: boolean
+          description: True if any security is taken; false implies fully unsecured deal.
+        unsecuredReason:
+          type: string
+          description: Required when secured=false (policy/risk justification)
+
+        collaterals:
+          type: array
+          items: { $ref: "#/components/schemas/Collateral" }
+
+        facilityAllocations:
+          type: array
+          description: N:M join for Facility <-> Collateral allocations.
+          items: { $ref: "#/components/schemas/FacilitySecurityAllocation" }
+
+    DealSecurityCreate:
+      type: object
+      additionalProperties: false
+      required: [secured, collaterals, facilityAllocations]
+      properties:
+        secured: { type: boolean }
+        unsecuredReason: { type: string }
+        collaterals:
+          type: array
+          items: { $ref: "#/components/schemas/CollateralCreate" }
+        facilityAllocations:
+          type: array
+          items: { $ref: "#/components/schemas/FacilitySecurityAllocationCreate" }
+
+    Collateral:
+      type: object
+      additionalProperties: false
+      required: [collateralId, collateralType, securityProviderPartyIds, assets]
+      properties:
+        collateralId: { type: string }
+        collateralType:
+          type: string
+          enum:
+            - REGISTERED_MORTGAGE
+            - GENERAL_SECURITY_AGREEMENT
+            - CASH_COLLATERAL
+            - PPSR_SECURITY
+            - OTHER
+        securityProviderPartyIds:
+          type: array
+          minItems: 1
+          items: { type: string }
+          description: LegalParty.partyIds providing security (may differ from obligors).
+        ranking:
+          type: string
+          enum: [FIRST, SECOND, SUBSEQUENT, UNRANKED]
+        assets:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/Asset" }
+
+    CollateralCreate:
+      type: object
+      additionalProperties: false
+      required: [collateralType, securityProviderPartyIds, assets]
+      properties:
+        collateralType:
+          type: string
+          enum:
+            - REGISTERED_MORTGAGE
+            - GENERAL_SECURITY_AGREEMENT
+            - CASH_COLLATERAL
+            - PPSR_SECURITY
+            - OTHER
+        securityProviderPartyIds:
+          type: array
+          minItems: 1
+          items: { type: string }
+        ranking:
+          type: string
+          enum: [FIRST, SECOND, SUBSEQUENT, UNRANKED]
+        assets:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/Asset" }
+
+    FacilitySecurityAllocation:
+      type: object
+      additionalProperties: false
+      required: [borrowingEntityId, facilityId, collateralId, allocatedAmount]
+      properties:
+        borrowingEntityId:
+          type: string
+          description: References BorrowingEntity.borrowingEntityId
+        facilityId:
+          type: string
+          description: Facility id within the referenced borrowing entity.
+        collateralId: { type: string }
+        allocatedAmount: { $ref: "#/components/schemas/Money" }
+        priority:
+          type: integer
+          minimum: 1
+        notes: { type: string }
+
+    FacilitySecurityAllocationCreate:
+      type: object
+      additionalProperties: false
+      required: [borrowingEntityId, facilityId, collateralId, allocatedAmount]
+      properties:
+        borrowingEntityId: { type: string }
+        facilityId: { type: string }
+        collateralId: { type: string }
+        allocatedAmount: { $ref: "#/components/schemas/Money" }
+        priority:
+          type: integer
+          minimum: 1
+        notes: { type: string }
+
+    Asset:
+      oneOf:
+        - $ref: "#/components/schemas/PropertyAsset"
+        - $ref: "#/components/schemas/TermDepositAsset"
+        - $ref: "#/components/schemas/GSAAsset"
+      discriminator:
+        propertyName: assetType
+        mapping:
+          PROPERTY: "#/components/schemas/PropertyAsset"
+          TERM_DEPOSIT: "#/components/schemas/TermDepositAsset"
+          GSA: "#/components/schemas/GSAAsset"
+
+    AssetBase:
+      type: object
+      additionalProperties: false
+      required: [assetId, assetType, valuation]
+      properties:
+        assetId: { type: string }
+        assetType:
+          type: string
+          enum: [PROPERTY, TERM_DEPOSIT, GSA]
+        valuation: { $ref: "#/components/schemas/Valuation" }
+
+    Valuation:
+      type: object
+      additionalProperties: false
+      required: [value, valuationDate, basis]
+      properties:
+        value: { $ref: "#/components/schemas/Money" }
+        valuationDate: { $ref: "#/components/schemas/ISODate" }
+        basis:
+          type: string
+          enum: [MARKET, FORCED_SALE, BANK, CUSTOMER_ESTIMATE]
+        valuer: { type: string }
+
+    PropertyAsset:
+      allOf:
+        - $ref: "#/components/schemas/AssetBase"
+        - type: object
+          additionalProperties: false
+          required: [assetType, propertyType, address]
+          properties:
+            assetType: { type: string, const: PROPERTY }
+            propertyType:
+              type: string
+              enum: [COMMERCIAL, RESIDENTIAL, INDUSTRIAL, RURAL, MIXED_USE]
+            address: { $ref: "#/components/schemas/AustralianAddress" }
+            titleReference: { type: string }
+            occupancyStatus:
+              type: string
+              enum: [OWNER_OCCUPIED, INVESTMENT, VACANT, OTHER]
+
+    TermDepositAsset:
+      allOf:
+        - $ref: "#/components/schemas/AssetBase"
+        - type: object
+          additionalProperties: false
+          required: [assetType, institution, maturityDate]
+          properties:
+            assetType: { type: string, const: TERM_DEPOSIT }
+            institution:
+              type: string
+              enum: [WESTPAC, OTHER]
+            maturityDate: { $ref: "#/components/schemas/ISODate" }
+            accountMasked:
+              type: string
+              description: Masked TD account identifier (do not expose full)
+
+    GSAAsset:
+      allOf:
+        - $ref: "#/components/schemas/AssetBase"
+        - type: object
+          additionalProperties: false
+          required: [assetType, securedParty, coverage]
+          properties:
+            assetType: { type: string, const: GSA }
+            securedParty:
+              type: string
+              enum: [WESTPAC, OTHER]
+            coverage:
+              type: string
+              enum: [ALL_PRESENT_AND_AFTER_ACQUIRED_PROPERTY, LIMITED]
+            ppsrRegistrationNumber: { type: string }
+
+    # --------------------------
+    # Lifecycle operations
+    # --------------------------
+    LifecycleOperationRecord:
+      type: object
+      additionalProperties: false
+      required: [operationId, type, requestedAt, requestedBy, status]
+      properties:
+        operationId: { type: string }
+        type: { $ref: "#/components/schemas/LifecycleOperationType" }
+        requestedAt: { $ref: "#/components/schemas/ISODateTime" }
+        requestedBy:
+          type: string
+          description: Banker/user id
+        status:
+          type: string
+          enum: [RECEIVED, IN_REVIEW, APPROVED, REJECTED, COMPLETED]
+        summary: { type: string }
+
+    LifecycleOperationReceipt:
+      type: object
+      additionalProperties: false
+      required: [operationId, type, status]
+      properties:
+        operationId: { type: string }
+        type: { $ref: "#/components/schemas/LifecycleOperationType" }
+        status:
+          type: string
+          enum: [RECEIVED, IN_REVIEW]
+
+    NewMoneyRequest:
+      type: object
+      additionalProperties: false
+      required: [requestedBy, effectiveDate, changes]
+      properties:
+        requestedBy: { type: string }
+        effectiveDate: { $ref: "#/components/schemas/ISODate" }
+        changes: { $ref: "#/components/schemas/CreditChangeSet" }
+
+    VariationRequest:
+      type: object
+      additionalProperties: false
+      required: [requestedBy, effectiveDate, variationReason, changes]
+      properties:
+        requestedBy: { type: string }
+        effectiveDate: { $ref: "#/components/schemas/ISODate" }
+        variationReason:
+          type: string
+          enum: [LIMIT_INCREASE, LIMIT_DECREASE, TERM_EXTENSION, PRICING_CHANGE, SECURITY_CHANGE, OTHER]
+        changes: { $ref: "#/components/schemas/CreditChangeSet" }
+
+    ClosureRequest:
+      type: object
+      additionalProperties: false
+      required: [requestedBy, effectiveDate, closureScope]
+      properties:
+        requestedBy: { type: string }
+        effectiveDate: { $ref: "#/components/schemas/ISODate" }
+        closureScope:
+          oneOf:
+            - $ref: "#/components/schemas/FacilityClosure"
+            - $ref: "#/components/schemas/DealClosure"
+          discriminator:
+            propertyName: scopeType
+            mapping:
+              FACILITY: "#/components/schemas/FacilityClosure"
+              DEAL: "#/components/schemas/DealClosure"
+
+    FacilityClosure:
+      type: object
+      additionalProperties: false
+      required: [scopeType, borrowingEntityId, facilityId, reason]
+      properties:
+        scopeType: { type: string, const: FACILITY }
+        borrowingEntityId: { type: string }
+        facilityId: { type: string }
+        reason:
+          type: string
+          enum: [REFINANCED, PAID_OUT, WRITE_OFF, OTHER]
+        settlementAmount: { $ref: "#/components/schemas/Money" }
+
+    DealClosure:
+      type: object
+      additionalProperties: false
+      required: [scopeType, reason]
+      properties:
+        scopeType: { type: string, const: DEAL }
+        reason:
+          type: string
+          enum: [ALL_FACILITIES_CLOSED, WITHDRAWN, OTHER]
+
+    # --------------------------
+    # Credit ChangeSet (supports nested facility changes)
+    # --------------------------
+    CreditChangeSet:
+      type: object
+      additionalProperties: false
+      properties:
+        umbrellaLimitChange: { $ref: "#/components/schemas/UmbrellaLimitDelta" }
+
+        facilityChanges:
+          type: array
+          description: |
+            Facility deltas are addressed by borrowingEntityId + facilityId because facilities are nested.
+          items: { $ref: "#/components/schemas/FacilityDelta" }
+
+        securityChanges: { $ref: "#/components/schemas/SecurityDelta" }
+
+    UmbrellaLimitDelta:
+      type: object
+      additionalProperties: false
+      required: [newApprovedLimit]
+      properties:
+        newApprovedLimit: { $ref: "#/components/schemas/Money" }
+        rationale: { type: string }
+
+    FacilityDelta:
+      type: object
+      additionalProperties: false
+      required: [borrowingEntityId, facilityId, changeType]
+      properties:
+        borrowingEntityId: { type: string }
+        facilityId: { type: string }
+        changeType:
+          type: string
+          enum: [LIMIT_CHANGE, TERM_CHANGE, PRICING_CHANGE, PRODUCT_CHANGE, CLOSE]
+        newFacilityLimit: { $ref: "#/components/schemas/Money" }
+        newUmbrellaConsumption:
+          $ref: "#/components/schemas/UmbrellaConsumptionCreate"
+        newTermEndDate: { $ref: "#/components/schemas/ISODate" }
+        newPricing: { $ref: "#/components/schemas/Pricing" }
+        newProduct: { $ref: "#/components/schemas/WestpacFacilityProduct" }
+        notes: { type: string }
+
+    SecurityDelta:
+      type: object
+      additionalProperties: false
+      properties:
+        addCollaterals:
+          type: array
+          items: { $ref: "#/components/schemas/CollateralCreate" }
+        removeCollateralIds:
+          type: array
+          items: { type: string }
+        updateAllocations:
+          type: array
+          items: { $ref: "#/components/schemas/FacilitySecurityAllocationCreate" }

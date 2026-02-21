@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"workflow-engine/internal/database"
+	"workflow-engine/internal/integration"
+	"workflow-engine/internal/multitenancy"
 	"workflow-engine/internal/server"
 
 	"github.com/joho/godotenv"
@@ -68,10 +70,11 @@ func main() {
 	}
 
 	// 3. Setup HTTP router
-	mux := http.NewServeMux()
+	rootMux := http.NewServeMux()
+	apiMux := http.NewServeMux()
 
 	// Health probes
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+	rootMux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		if err := database.HealthCheck(r.Context(), db); err != nil {
 			http.Error(w, `{"status":"unhealthy","database":false}`, http.StatusServiceUnavailable)
 			return
@@ -80,8 +83,8 @@ func main() {
 		w.Write([]byte(`{"status":"up","database":true}`))
 	})
 
-	// TODO: Mount application domain routers here once domains are wired
-	// mux.Handle("/api/v1/cases", casesRouter)
+	integration.RegisterDealIngestionHandlers(apiMux, db, slog.Default())
+	rootMux.Handle("/", multitenancy.TenantMiddleware(db, apiMux))
 
 	// Bind middleware stack
 	allowedOrigins := os.Getenv("CORS_ALLOWED_ORIGINS")
@@ -89,7 +92,7 @@ func main() {
 		allowedOrigins = "http://localhost:5173,http://localhost:3000,http://localhost:80" // Defaults for local UI devs
 	}
 
-	handler := server.RequestLogger(mux)
+	handler := server.RequestLogger(rootMux)
 	handler = server.CORSMiddleware(allowedOrigins)(handler)
 
 	srv := &http.Server{

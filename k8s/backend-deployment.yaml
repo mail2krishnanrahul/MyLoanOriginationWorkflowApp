@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: workflow-engine
+  labels:
+    app: workflow-engine
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: workflow-engine
+  template:
+    metadata:
+      labels:
+        app: workflow-engine
+    spec:
+      containers:
+      - name: workflow-engine
+        image: workflow-engine:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8080
+        env:
+        - name: DATABASE_URL
+          value: "postgres://myappuser:password@postgres:5432/LoanOriginationDB?sslmode=disable"
+        # Add other necessary ENVs here
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: workflow-engine
+spec:
+  selector:
+    app: workflow-engine
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
+  type: ClusterIP

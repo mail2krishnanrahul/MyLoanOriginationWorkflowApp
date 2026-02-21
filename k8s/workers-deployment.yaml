@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: workflow-dispatcher
+  labels:
+    app: workflow-dispatcher
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: workflow-dispatcher
+  template:
+    metadata:
+      labels:
+        app: workflow-dispatcher
+    spec:
+      containers:
+      - name: workflow-dispatcher
+        image: workflow-dispatcher:latest
+        imagePullPolicy: Never
+        env:
+        - name: DATABASE_URL
+          value: "postgres://myappuser:password@postgres:5432/LoanOriginationDB?sslmode=disable"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: workflow-sweeper
+  labels:
+    app: workflow-sweeper
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: workflow-sweeper
+  template:
+    metadata:
+      labels:
+        app: workflow-sweeper
+    spec:
+      containers:
+      - name: workflow-sweeper
+        image: workflow-sweeper:latest
+        imagePullPolicy: Never
+        env:
+        - name: DATABASE_URL
+          value: "postgres://myappuser:password@postgres:5432/LoanOriginationDB?sslmode=disable"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: workflow-worker
+  labels:
+    app: workflow-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: workflow-worker
+  template:
+    metadata:
+      labels:
+        app: workflow-worker
+    spec:
+      containers:
+      - name: workflow-worker
+        image: workflow-worker:latest
+        imagePullPolicy: Never
+        env:
+        - name: DATABASE_URL
+          value: "postgres://myappuser:password@postgres:5432/LoanOriginationDB?sslmode=disable"

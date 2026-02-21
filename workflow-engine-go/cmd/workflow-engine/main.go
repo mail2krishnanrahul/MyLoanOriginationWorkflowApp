@@ -193,6 +193,7 @@ func main() {
 	apiMux := http.NewServeMux()
 	// Case management API
 	engine.RegisterCaseHandlers(apiMux, repo)
+	integration.RegisterDealIngestionHandlers(apiMux, sqlxDB, slog.Default())
 	notification.RegisterNotificationHandlers(apiMux, sqlxDB, slog.Default())
 
 	// Existing API remains tenant-header based.

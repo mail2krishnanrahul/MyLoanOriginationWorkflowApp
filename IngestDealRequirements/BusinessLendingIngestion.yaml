@@ -1,0 +1,1152 @@
+# ============================================================
+#  WESTPAC BUSINESS LENDING — DEAL INGESTION & CASE API
+#  Extension to BusinessLoan.yaml (v2.0.0)
+#  Designed to be merged into the main spec or run as a
+#  companion micro-service spec alongside BusinessLoan.yaml.
+# ============================================================
+#
+#  ARCHITECTURAL DECISION RECORD — REFRESH vs DELTA LOAD
+#  ──────────────────────────────────────────────────────
+#
+#  Context:
+#    The origination system (upstream) ALWAYS sends a full deal
+#    snapshot at any point in time. It does NOT send event deltas
+#    or field-level patches. The workflow engine receives these
+#    snapshots and must decide what to do.
+#
+#  Option A — Complete Refresh (naive overwrite)
+#    Pros  : Simple to implement. No diff logic.
+#    Cons  : Destroys case-worker assignments, task progress,
+#            internal annotations, and SLA clocks on every push.
+#            Any concurrent case action races against the refresh.
+#            Produces noisy audit trails ("everything changed").
+#            Cannot distinguish intentional changes from
+#            re-transmission of unchanged data.
+#    Verdict: REJECTED.
+#
+#  Option B — Pure Delta (event-sourced, field-by-field)
+#    Pros  : Maximum fidelity. Every change is a discrete event.
+#    Cons  : Requires the origination system to produce events,
+#            which it does NOT. We would need to reconstruct
+#            event sequences from snapshots — complex, fragile,
+#            and out of scope for this integration boundary.
+#    Verdict: REJECTED for this integration tier.
+#
+#  Option C — SNAPSHOT-DRIVEN DELTA DETECTION (CHOSEN)
+#    The ingest endpoint accepts the full snapshot. The service:
+#      1. Computes a deterministic content hash of the incoming
+#         snapshot (SHA-256 of canonical JSON).
+#      2. Compares against the hash stored from the last ingestion.
+#      3. If hashes match → no-op (idempotent re-delivery guard).
+#      4. If hashes differ → compute a structured diff at the
+#         level of MATERIAL CHANGE DOMAINS (deal status, umbrella
+#         limit, facility set, security set, party set).
+#      5. The case's DealSnapshot is always overwritten with the
+#         latest full snapshot (source of truth for deal data).
+#      6. ONLY material changes trigger case workflow signals
+#         (e.g., status transition to DOCUMENT_VERIFICATION →
+#         create/assign case; facility added → add checklist item).
+#      7. The case's OWN state (assignee, task progress, SLA,
+#         internal notes) is NEVER touched by the ingestion.
+#
+#  Why this is correct:
+#    - The case system owns case state. The origination system
+#      owns deal state. This boundary is respected.
+#    - Idempotency guard prevents duplicate case creation on
+#      retry storms from the origination system.
+#    - Structured diff gives auditors a clear change narrative.
+#    - Content hashing is O(1) for the no-op path (hot path for
+#      re-deliveries), making it safe to receive snapshots at
+#      high frequency.
+# ============================================================
+
+openapi: 3.1.0
+
+info:
+  title: Westpac Business Lending — Deal Ingestion & Case Management API
+  version: 1.0.0
+  description: |
+    Companion API to BusinessLoan.yaml (v2.0.0).
+
+    Exposes two capability groups:
+      1. **Deal Ingestion** — `POST /ingest/deals` receives full deal
+         snapshots from the origination system and performs
+         snapshot-driven delta detection to upsert Cases.
+      2. **Case Management** — CRUD and workflow operations on Cases
+         created by the ingestion pipeline or manually by operators.
+
+    Integration model:
+      - Origination system → `POST /ingest/deals` (push, any frequency)
+      - Workflow engine consumes case state and signals
+      - Downstream doc-verification UI reads `GET /cases/{caseId}`
+
+servers:
+  - url: https://api.westpac.example.com/business-lending/workflow
+    description: Workflow & Case micro-service
+
+tags:
+  - name: Ingestion
+    description: Snapshot ingestion from origination system
+  - name: Cases
+    description: Case lifecycle management
+  - name: CaseTasks
+    description: Document verification tasks within a Case
+
+paths:
+
+  # ────────────────────────────────────────────────
+  # INGESTION ENDPOINT
+  # ────────────────────────────────────────────────
+
+  /ingest/deals:
+    post:
+      tags: [Ingestion]
+      operationId: ingestDeal
+      summary: Ingest a full deal snapshot from the origination system
+      description: |
+        **This is the primary integration entry point.**
+
+        Accepts a complete `BusinessLendingDeal` snapshot.
+        The service applies snapshot-driven delta detection:
+
+        1. Compute SHA-256 of the canonical snapshot payload.
+        2. Look up any existing `IngestedDealRecord` by `dealId`.
+        3. **Hash match** → return `IDEMPOTENT_NO_OP` (202, no case changes).
+        4. **Hash differs** → compute a `DealDiff` across material domains.
+        5. Overwrite `IngestedDealRecord.dealSnapshot` with the new snapshot.
+        6. Evaluate `DealDiff` against case trigger rules (see `CaseTriggerRule`).
+        7. If `deal.status == DOCUMENT_VERIFICATION` and no open case exists
+           → **CREATE** a new Case with status `OPEN`.
+        8. If an open Case exists and material changes were detected
+           → **UPDATE** the case's deal snapshot reference and
+             append a `CaseDealUpdateEvent` to the case timeline.
+        9. If the Case is already `CLOSED` and a new `DOCUMENT_VERIFICATION`
+           snapshot arrives → create a NEW case (re-open scenario).
+
+        **Idempotency:** Clients SHOULD supply `X-Idempotency-Key`
+        (e.g., origination system's event ID). The service will return
+        the same `IngestResponse` for duplicate keys within 24 hours.
+      parameters:
+        - name: X-Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+            maxLength: 128
+          description: |
+            Caller-supplied idempotency key. Recommended for retry safety.
+            If supplied and a result exists for this key, the cached
+            response is returned without re-processing.
+        - name: X-Source-System
+          in: header
+          required: true
+          schema:
+            type: string
+            enum: [ORIGINATION, MANUAL_OVERRIDE, MIGRATION]
+          description: Identity of the upstream system sending the snapshot.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IngestDealRequest"
+            examples:
+              harbour_group_document_verification:
+                summary: Harbour Group deal transitioning to DOCUMENT_VERIFICATION
+                value:
+                  $ref: "#/components/examples/HarbourGroupDealSnapshot"
+      responses:
+        "202":
+          description: |
+            Snapshot accepted. Processing result indicates what action was taken.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestResponse"
+        "400":
+          description: Schema validation failure — snapshot is malformed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "409":
+          description: |
+            Concurrent ingestion conflict — another ingestion for the same
+            dealId is currently in-flight. Retry after indicated delay.
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+              description: Seconds to wait before retrying
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "422":
+          description: |
+            Snapshot is structurally valid but fails business rule validation
+            (e.g., umbrella headroom negative, trust obligor missing trustee).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
+  /ingest/deals/{dealId}/history:
+    get:
+      tags: [Ingestion]
+      operationId: getIngestionHistory
+      summary: Retrieve ingestion history for a deal
+      description: |
+        Returns the ordered list of ingestion events for a given deal,
+        including the diff summary for each snapshot transition.
+        Useful for audit and debugging.
+      parameters:
+        - $ref: "#/components/parameters/DealId"
+      responses:
+        "200":
+          description: Ingestion history
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  dealId:
+                    type: string
+                  ingestions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/IngestionRecord"
+
+  # ────────────────────────────────────────────────
+  # CASE ENDPOINTS
+  # ────────────────────────────────────────────────
+
+  /cases:
+    get:
+      tags: [Cases]
+      operationId: listCases
+      summary: List cases (filterable)
+      parameters:
+        - name: dealId
+          in: query
+          schema: { type: string }
+        - name: status
+          in: query
+          schema: { $ref: "#/components/schemas/CaseStatus" }
+        - name: assignedTo
+          in: query
+          schema: { type: string }
+        - name: triggerStatus
+          in: query
+          description: Filter by the deal status that triggered the case
+          schema:
+            type: string
+        - name: page
+          in: query
+          schema: { type: integer, default: 1 }
+        - name: pageSize
+          in: query
+          schema: { type: integer, default: 20, maximum: 100 }
+      responses:
+        "200":
+          description: Paginated case list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaseListResponse"
+
+  /cases/{caseId}:
+    parameters:
+      - $ref: "#/components/parameters/CaseId"
+    get:
+      tags: [Cases]
+      operationId: getCase
+      summary: Retrieve a case with full deal snapshot and task list
+      responses:
+        "200":
+          description: Case detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Case"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    patch:
+      tags: [Cases]
+      operationId: patchCase
+      summary: Update case metadata (assignee, priority, notes)
+      description: |
+        Used by operators to update case-owned fields.
+        Does NOT affect the deal snapshot — that is ingestion-managed only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CasePatchRequest"
+      responses:
+        "200":
+          description: Updated case
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Case"
+
+  /cases/{caseId}/status:
+    parameters:
+      - $ref: "#/components/parameters/CaseId"
+    post:
+      tags: [Cases]
+      operationId: transitionCaseStatus
+      summary: Transition case status (workflow gate)
+      description: |
+        Explicit status transition endpoint. Enforces allowed transitions:
+
+        ```
+        OPEN → IN_PROGRESS (assign + begin work)
+        IN_PROGRESS → PENDING_INFORMATION (awaiting customer)
+        PENDING_INFORMATION → IN_PROGRESS (info received)
+        IN_PROGRESS → VERIFIED (all tasks completed)
+        VERIFIED → CLOSED (sign-off received)
+        OPEN | IN_PROGRESS → CANCELLED (deal withdrawn/declined)
+        ```
+
+        Transitions are rejected if required tasks are incomplete.
+        E.g., VERIFIED requires all MANDATORY tasks to be in COMPLETED state.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CaseStatusTransitionRequest"
+      responses:
+        "200":
+          description: Case after transition
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Case"
+        "409":
+          description: Transition not allowed from current state or incomplete tasks
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
+  /cases/{caseId}/timeline:
+    parameters:
+      - $ref: "#/components/parameters/CaseId"
+    get:
+      tags: [Cases]
+      operationId: getCaseTimeline
+      summary: Retrieve the full audit timeline of a case
+      responses:
+        "200":
+          description: Timeline events in chronological order
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  caseId:
+                    type: string
+                  events:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CaseTimelineEvent"
+
+  # ────────────────────────────────────────────────
+  # CASE TASK ENDPOINTS (Document Verification)
+  # ────────────────────────────────────────────────
+
+  /cases/{caseId}/tasks:
+    parameters:
+      - $ref: "#/components/parameters/CaseId"
+    get:
+      tags: [CaseTasks]
+      operationId: listCaseTasks
+      summary: List all document verification tasks for a case
+      responses:
+        "200":
+          description: Task list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  caseId:
+                    type: string
+                  tasks:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CaseTask"
+
+    post:
+      tags: [CaseTasks]
+      operationId: addCaseTask
+      summary: Manually add a verification task to a case
+      description: |
+        Allows operators to supplement auto-generated tasks with
+        ad-hoc requirements (e.g., an unusual document requested by credit).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CaseTaskCreateRequest"
+      responses:
+        "201":
+          description: Task created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaseTask"
+
+  /cases/{caseId}/tasks/{taskId}:
+    parameters:
+      - $ref: "#/components/parameters/CaseId"
+      - $ref: "#/components/parameters/TaskId"
+    patch:
+      tags: [CaseTasks]
+      operationId: updateCaseTask
+      summary: Update task status or add verification notes/document reference
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CaseTaskPatchRequest"
+      responses:
+        "200":
+          description: Updated task
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaseTask"
+
+# ────────────────────────────────────────────────────────────
+# COMPONENTS
+# ────────────────────────────────────────────────────────────
+components:
+
+  parameters:
+    DealId:
+      name: dealId
+      in: path
+      required: true
+      schema: { type: string }
+    CaseId:
+      name: caseId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    TaskId:
+      name: taskId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+
+  responses:
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+
+  schemas:
+
+    # ──────────────────────────────────────────
+    # INGESTION SCHEMAS
+    # ──────────────────────────────────────────
+
+    IngestDealRequest:
+      type: object
+      description: |
+        Wrapper around the full deal snapshot. Includes metadata
+        to support source tracing and idempotency on the ingestion side.
+      additionalProperties: false
+      required: [snapshot, snapshotTimestamp, sourceSystem]
+      properties:
+        snapshot:
+          description: |
+            The complete BusinessLendingDeal payload as defined in
+            BusinessLoan.yaml#/components/schemas/BusinessLendingDeal.
+            Reproduced here by reference for tooling compatibility.
+          type: object
+          description: Full BusinessLendingDeal snapshot (see BusinessLoan.yaml)
+        snapshotTimestamp:
+          type: string
+          format: date-time
+          description: |
+            The timestamp at which the origination system produced this
+            snapshot. Must be in UTC. Used to order concurrent snapshots
+            (last-writer-wins by snapshotTimestamp, not arrival time).
+        sourceSystem:
+          type: string
+          enum: [ORIGINATION, MANUAL_OVERRIDE, MIGRATION]
+        correlationId:
+          type: string
+          description: Origination system's event/message ID for end-to-end tracing.
+
+    IngestResponse:
+      type: object
+      additionalProperties: false
+      required: [ingestId, dealId, outcome, snapshotHash]
+      properties:
+        ingestId:
+          type: string
+          format: uuid
+          description: Unique identifier for this ingestion operation.
+        dealId:
+          type: string
+        snapshotHash:
+          type: string
+          description: SHA-256 of the canonical snapshot JSON accepted by the service.
+        outcome:
+          $ref: "#/components/schemas/IngestOutcome"
+        diff:
+          $ref: "#/components/schemas/DealDiff"
+          description: Present when outcome is UPDATED or CASE_CREATED or CASE_UPDATED.
+        caseId:
+          type: string
+          format: uuid
+          description: Present when a Case was created or already existed.
+        caseAction:
+          $ref: "#/components/schemas/CaseAction"
+          description: What happened to the Case as a result of this ingestion.
+        processedAt:
+          type: string
+          format: date-time
+
+    IngestOutcome:
+      type: string
+      enum:
+        - IDEMPOTENT_NO_OP
+          # Hash matched — snapshot identical to last ingested version.
+          # No case or deal record changes were made.
+        - FIRST_INGESTION
+          # First time this dealId has been seen. Record created.
+          # Case created only if status triggers it.
+        - UPDATED
+          # Hash differed. DealSnapshot updated. Diff computed.
+          # Case action determined by diff + trigger rules.
+      description: |
+        - `IDEMPOTENT_NO_OP` — Snapshot hash matched. Nothing changed.
+        - `FIRST_INGESTION` — New deal seen for the first time.
+        - `UPDATED` — Snapshot changed; diff computed and actions applied.
+
+    CaseAction:
+      type: string
+      enum:
+        - NONE
+          # No case action taken (status doesn't trigger a case, or no material diff).
+        - CASE_CREATED
+          # New Case created (first time DOCUMENT_VERIFICATION status seen, or re-open).
+        - CASE_SNAPSHOT_REFRESHED
+          # Existing open Case had its deal snapshot reference updated.
+          # Case state (tasks, assignee) unchanged.
+        - CASE_DEAL_CHANGE_FLAGGED
+          # Material changes detected (new facility, limit change, party change).
+          # A CaseDealUpdateEvent was appended to the case timeline.
+          # Assignee notified (if configured).
+        - CASE_ALREADY_CLOSED_NEW_CASE_CREATED
+          # Previous case for this deal was CLOSED; a new case was opened.
+
+    DealDiff:
+      type: object
+      description: |
+        Structured summary of material changes between the previous
+        snapshot and the newly ingested snapshot.
+        Computed at the level of business-meaningful domains, not field-by-field.
+      additionalProperties: false
+      properties:
+        statusChanged:
+          type: boolean
+        previousStatus:
+          type: string
+        newStatus:
+          type: string
+        umbrellaLimitChanged:
+          type: boolean
+        previousApprovedLimit:
+          type: object
+          properties:
+            amount: { type: number }
+            currency: { type: string }
+        newApprovedLimit:
+          type: object
+          properties:
+            amount: { type: number }
+            currency: { type: string }
+        facilitiesAdded:
+          type: array
+          description: facilityIds present in new snapshot but not in previous
+          items: { type: string }
+        facilitiesRemoved:
+          type: array
+          description: facilityIds present in previous snapshot but not in new
+          items: { type: string }
+        facilitiesModified:
+          type: array
+          description: facilityIds where limit, pricing, or term changed
+          items:
+            type: object
+            properties:
+              facilityId: { type: string }
+              changeTypes:
+                type: array
+                items:
+                  type: string
+                  enum: [LIMIT_CHANGE, PRICING_CHANGE, TERM_CHANGE, STATUS_CHANGE]
+        partiesAdded:
+          type: array
+          items: { type: string }
+          description: partyIds added to legalParties
+        partiesModified:
+          type: array
+          items: { type: string }
+          description: partyIds where regulatory or contact data changed
+        securityChanged:
+          type: boolean
+        collateralsAdded:
+          type: array
+          items: { type: string }
+        collateralsRemoved:
+          type: array
+          items: { type: string }
+        isMaterial:
+          type: boolean
+          description: |
+            True if any change domain that triggers case workflow signals is affected.
+            Material domains: status, umbrella limit, facilities (add/remove/limit-change),
+            parties (add/remove), security (add/remove collateral).
+            Non-material: notes, customerReference, displayName cosmetic changes.
+
+    IngestionRecord:
+      type: object
+      additionalProperties: false
+      properties:
+        ingestId: { type: string, format: uuid }
+        snapshotTimestamp: { type: string, format: date-time }
+        receivedAt: { type: string, format: date-time }
+        snapshotHash: { type: string }
+        outcome: { $ref: "#/components/schemas/IngestOutcome" }
+        caseAction: { $ref: "#/components/schemas/CaseAction" }
+        diffSummary: { $ref: "#/components/schemas/DealDiff" }
+        sourceSystem: { type: string }
+        correlationId: { type: string }
+
+    # ──────────────────────────────────────────
+    # CASE SCHEMAS
+    # ──────────────────────────────────────────
+
+    Case:
+      type: object
+      description: |
+        A Case represents the workflow envelope for a deal at a specific
+        lifecycle stage requiring human intervention.
+
+        The first workflow stage modelled here is `DOCUMENT_VERIFICATION`,
+        triggered when a deal reaches `DealStatus = DOCUMENT_VERIFICATION`.
+
+        SEPARATION OF CONCERNS:
+          - `dealSnapshot` is always the latest ingested deal payload.
+            It is READ-ONLY from the case perspective.
+          - All other fields (status, assignee, tasks, timeline) are
+            owned exclusively by the case system.
+      additionalProperties: false
+      required:
+        - caseId
+        - caseType
+        - status
+        - dealId
+        - dealSnapshot
+        - tasks
+        - timeline
+        - createdAt
+      properties:
+        caseId:
+          type: string
+          format: uuid
+        caseType:
+          $ref: "#/components/schemas/CaseType"
+        status:
+          $ref: "#/components/schemas/CaseStatus"
+        priority:
+          $ref: "#/components/schemas/CasePriority"
+        dealId:
+          type: string
+          description: References the upstream BusinessLendingDeal.dealId
+        dealName:
+          type: string
+          description: Copied from deal at case creation for display convenience
+        customerReference:
+          type: string
+        umbrellaLimit:
+          type: object
+          description: Copied from deal at case creation for display convenience
+          properties:
+            amount: { type: number }
+            currency: { type: string }
+        triggerDealStatus:
+          type: string
+          description: The DealStatus value that caused this case to be created
+          example: DOCUMENT_VERIFICATION
+        dealSnapshot:
+          type: object
+          description: |
+            The complete BusinessLendingDeal snapshot as of the last ingestion.
+            Always reflects the most current origination system state.
+            Treat as READ-ONLY from the case-worker perspective.
+        dealSnapshotHash:
+          type: string
+          description: SHA-256 of the current dealSnapshot for integrity checking
+        lastSnapshotRefreshedAt:
+          type: string
+          format: date-time
+        assignedTo:
+          type: string
+          description: User ID of the case worker currently assigned
+        assignedAt:
+          type: string
+          format: date-time
+        team:
+          type: string
+          description: Team or queue this case belongs to (e.g., "DOC_VERIFY_SYDNEY_CBD")
+        sla:
+          $ref: "#/components/schemas/CaseSLA"
+        tasks:
+          type: array
+          description: |
+            Document verification task checklist. Auto-generated on case creation
+            based on deal structure (see task generation rules). Supplemented
+            by manual tasks added by operators.
+          items:
+            $ref: "#/components/schemas/CaseTask"
+        completedTaskCount:
+          type: integer
+          readOnly: true
+        totalTaskCount:
+          type: integer
+          readOnly: true
+        mandatoryTasksComplete:
+          type: boolean
+          readOnly: true
+          description: True when all MANDATORY tasks are in COMPLETED or WAIVED state
+        timeline:
+          type: array
+          description: Append-only audit timeline of all events on this case
+          items:
+            $ref: "#/components/schemas/CaseTimelineEvent"
+        notes:
+          type: string
+          description: Free-text internal notes added by case workers
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        closedAt:
+          type: string
+          format: date-time
+
+    CaseType:
+      type: string
+      enum:
+        - DOCUMENT_VERIFICATION
+        # Triggered by DealStatus=DOCUMENT_VERIFICATION.
+        # Workers verify KYC docs, financials, trust deeds, valuations, etc.
+        - FULFILMENT
+        # (Future) Triggered by DealStatus=FULFILMENT.
+        - SETTLEMENT
+        # (Future) Triggered by DealStatus=SETTLEMENT_IN_PROGRESS.
+      description: |
+        Determines the task template and workflow rules applied to this case.
+        Only DOCUMENT_VERIFICATION is fully specified in v1.0. Other types
+        are reserved for future workflow stages.
+
+    CaseStatus:
+      type: string
+      enum:
+        - OPEN
+        - IN_PROGRESS
+        - PENDING_INFORMATION
+        - VERIFIED
+        - CLOSED
+        - CANCELLED
+      description: |
+        OPEN              — Case created, not yet assigned or worked.
+        IN_PROGRESS       — Assigned to a case worker, tasks underway.
+        PENDING_INFORMATION — Awaiting customer/third party response.
+        VERIFIED          — All mandatory tasks completed, ready for sign-off.
+        CLOSED            — Formally signed off and closed.
+        CANCELLED         — Deal was withdrawn/declined; case abandoned.
+
+    CasePriority:
+      type: string
+      enum: [LOW, NORMAL, HIGH, URGENT]
+      description: |
+        Set at case creation based on umbrella limit thresholds:
+          < $1M    → NORMAL
+          $1M–$5M  → HIGH
+          > $5M    → URGENT
+        Overridable by operators.
+
+    CaseSLA:
+      type: object
+      additionalProperties: false
+      properties:
+        targetCompletionDate:
+          type: string
+          format: date
+          description: Business-day SLA target from case creation
+        slaBreached:
+          type: boolean
+          readOnly: true
+        slaBreachDate:
+          type: string
+          format: date
+          description: Date SLA was or will be breached
+        warningThresholdDate:
+          type: string
+          format: date
+          description: Date at which a warning notification is triggered (e.g., D-2)
+
+    CasePatchRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        assignedTo: { type: string }
+        team: { type: string }
+        priority: { $ref: "#/components/schemas/CasePriority" }
+        notes: { type: string }
+
+    CaseStatusTransitionRequest:
+      type: object
+      additionalProperties: false
+      required: [toStatus, transitionedBy]
+      properties:
+        toStatus:
+          $ref: "#/components/schemas/CaseStatus"
+        transitionedBy:
+          type: string
+          description: User ID performing the transition
+        reason:
+          type: string
+          description: Required for CANCELLED and PENDING_INFORMATION transitions
+
+    CaseListResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/CaseSummary"
+        pagination:
+          $ref: "#/components/schemas/PaginationMeta"
+
+    CaseSummary:
+      type: object
+      additionalProperties: false
+      properties:
+        caseId: { type: string, format: uuid }
+        caseType: { $ref: "#/components/schemas/CaseType" }
+        status: { $ref: "#/components/schemas/CaseStatus" }
+        priority: { $ref: "#/components/schemas/CasePriority" }
+        dealId: { type: string }
+        dealName: { type: string }
+        assignedTo: { type: string }
+        mandatoryTasksComplete: { type: boolean }
+        totalTaskCount: { type: integer }
+        completedTaskCount: { type: integer }
+        slaBreached: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    # ──────────────────────────────────────────
+    # CASE TASKS
+    # ──────────────────────────────────────────
+
+    CaseTask:
+      type: object
+      additionalProperties: false
+      required:
+        - taskId
+        - taskType
+        - title
+        - status
+        - mandatory
+        - origin
+        - createdAt
+      properties:
+        taskId:
+          type: string
+          format: uuid
+        taskType:
+          $ref: "#/components/schemas/CaseTaskType"
+        title:
+          type: string
+          description: Human-readable task description
+          example: "Verify ASIC Company Extract — Harbour Trading Pty Ltd (PTY-001)"
+        status:
+          $ref: "#/components/schemas/CaseTaskStatus"
+        mandatory:
+          type: boolean
+          description: |
+            Mandatory tasks must be COMPLETED or WAIVED before the case
+            can transition to VERIFIED status.
+        origin:
+          type: string
+          enum: [AUTO_GENERATED, MANUALLY_ADDED]
+          description: Whether this task was generated by the ingestion pipeline or added manually
+        contextRef:
+          type: object
+          description: |
+            Reference to the deal entity this task relates to.
+            Enables the UI to deep-link to the relevant deal section.
+          properties:
+            entityType:
+              type: string
+              enum: [PARTY, FACILITY, COLLATERAL, TRUST, GUARANTOR, UMBRELLA]
+            entityId:
+              type: string
+            entityLabel:
+              type: string
+        documentReference:
+          type: string
+          description: Reference to the verified document in the document management system
+        verifiedBy:
+          type: string
+          description: User ID who completed/waived this task
+        verifiedAt:
+          type: string
+          format: date-time
+        notes:
+          type: string
+          description: Verification notes or exception justification
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    CaseTaskType:
+      type: string
+      enum:
+        # ── Party / KYC tasks (auto-generated per legalParty) ──
+        - KYC_COMPANY_EXTRACT
+          # Verify ASIC Company Extract is current (< 3 months)
+        - KYC_INDIVIDUAL_IDENTITY
+          # Verify drivers licence or passport for individual parties
+        - KYC_AML_SCREENING
+          # Confirm AML/CTF screening completed and cleared
+        - KYC_BENEFICIAL_OWNERSHIP
+          # Verify ultimate beneficial owner declaration
+        # ── Trust tasks (auto-generated per trustStructure) ──
+        - TRUST_DEED_VERIFICATION
+          # Verify trust deed — name, date, trustee, vesting date
+        - TRUST_DEED_AMENDMENT_CHECK
+          # Confirm no undisclosed amendments to trust deed
+        - TRUSTEE_AUTHORITY_CONFIRMATION
+          # Confirm trustee is authorised to borrow under trust deed
+        # ── Financial tasks (auto-generated per deal) ──
+        - FINANCIAL_STATEMENTS_REVIEW
+          # Verify last 2 years audited/reviewed financials received
+        - TAX_RETURNS_REVIEW
+          # Verify tax returns aligned to financial statements
+        - MANAGEMENT_ACCOUNTS_REVIEW
+          # Verify latest management accounts (if required by credit)
+        # ── Facility / Product tasks (auto-generated per facility) ──
+        - FACILITY_PURPOSE_EVIDENCE
+          # Verify evidence supporting stated facility purpose
+          # (e.g., Contract of Sale for property acquisition)
+        - EQUIPMENT_SCHEDULE_VERIFICATION
+          # For EQUIPMENT_FINANCE: verify asset schedule/invoice
+        # ── Security / Collateral tasks (auto-generated per collateral) ──
+        - VALUATION_REPORT_REVIEW
+          # Verify independent valuation report for each property asset
+        - TITLE_SEARCH_CONFIRMATION
+          # Confirm title search completed, no adverse encumbrances
+        - PPSR_SEARCH_CONFIRMATION
+          # Confirm PPSR search completed for GSA/chattel security
+        - INSURANCE_EVIDENCE
+          # Verify building and contents insurance for property security
+        # ── Guarantee tasks (auto-generated per guarantee) ──
+        - GUARANTEE_DOCUMENT_REVIEW
+          # Verify executed guarantee instrument received
+        - SOLICITORS_CERTIFICATE_OBTAINED
+          # Confirm independent legal advice certificate obtained
+        # ── Manual / Ad-hoc ──
+        - OTHER
+          # Manually added task not covered by above templates
+
+    CaseTaskStatus:
+      type: string
+      enum:
+        - PENDING
+          # Not yet started
+        - IN_PROGRESS
+          # Case worker has started but not completed
+        - COMPLETED
+          # Verified successfully, document reference attached
+        - WAIVED
+          # Waived by authorised approver with documented reason
+        - FAILED
+          # Verification failed; case may need to escalate
+      description: |
+        PENDING     — Default state on task creation.
+        IN_PROGRESS — Worker has started verification.
+        COMPLETED   — Document verified; documentReference should be populated.
+        WAIVED      — Exception approved; notes with approver reference required.
+        FAILED      — Verification could not be completed or document rejected.
+
+    CaseTaskCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [taskType, title, mandatory]
+      properties:
+        taskType:
+          $ref: "#/components/schemas/CaseTaskType"
+        title:
+          type: string
+        mandatory:
+          type: boolean
+        contextRef:
+          type: object
+          properties:
+            entityType:
+              type: string
+              enum: [PARTY, FACILITY, COLLATERAL, TRUST, GUARANTOR, UMBRELLA]
+            entityId: { type: string }
+            entityLabel: { type: string }
+        notes: { type: string }
+
+    CaseTaskPatchRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        status:
+          $ref: "#/components/schemas/CaseTaskStatus"
+        documentReference:
+          type: string
+        notes:
+          type: string
+        verifiedBy:
+          type: string
+
+    # ──────────────────────────────────────────
+    # CASE TIMELINE
+    # ──────────────────────────────────────────
+
+    CaseTimelineEvent:
+      type: object
+      additionalProperties: false
+      required: [eventId, eventType, occurredAt, actor]
+      properties:
+        eventId:
+          type: string
+          format: uuid
+        eventType:
+          $ref: "#/components/schemas/CaseTimelineEventType"
+        occurredAt:
+          type: string
+          format: date-time
+        actor:
+          type: string
+          description: User ID or system identifier (e.g., "INGESTION_SERVICE")
+        summary:
+          type: string
+          description: Human-readable event description
+        detail:
+          type: object
+          description: |
+            Event-type-specific payload.
+            For DEAL_SNAPSHOT_UPDATED: contains DealDiff summary.
+            For TASK_STATUS_CHANGED: contains taskId, from/to status.
+            For STATUS_TRANSITIONED: contains from/to CaseStatus.
+
+    CaseTimelineEventType:
+      type: string
+      enum:
+        - CASE_CREATED
+        - CASE_ASSIGNED
+        - STATUS_TRANSITIONED
+        - DEAL_SNAPSHOT_UPDATED
+          # Fired when ingestion detects a changed snapshot and refreshes the case
+        - DEAL_MATERIAL_CHANGE_DETECTED
+          # Fired when diff contains material changes (new facility, limit change, etc.)
+        - TASK_STATUS_CHANGED
+        - TASK_ADDED
+        - NOTE_ADDED
+        - SLA_WARNING_ISSUED
+        - SLA_BREACHED
+        - PRIORITY_CHANGED
+
+    # ──────────────────────────────────────────
+    # SHARED / UTILITY SCHEMAS
+    # ──────────────────────────────────────────
+
+    ProblemDetail:
+      type: object
+      description: RFC 9457 Problem Details for HTTP APIs
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          format: uri
+          example: "https://api.westpac.example.com/problems/validation-error"
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance:
+          type: string
+          format: uri
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              field: { type: string }
+              message: { type: string }
+              code: { type: string }
+
+    PaginationMeta:
+      type: object
+      additionalProperties: false
+      properties:
+        currentPage: { type: integer }
+        pageSize: { type: integer }
+        totalRecords: { type: integer }
+        totalPages: { type: integer }
+
+  examples:
+    HarbourGroupDealSnapshot:
+      summary: Harbour Group deal snapshot at DOCUMENT_VERIFICATION status
+      description: |
+        This is the SampleJSON.json payload with status changed to
+        DOCUMENT_VERIFICATION to demonstrate case creation trigger.
+      value:
+        snapshot:
+          dealId: "DL-20260221-000842"
+          dealName: "Harbour Group Expansion - FY26"
+          status: "DOCUMENT_VERIFICATION"
+          banker:
+            bankerId: "BKR-10933"
+            channel: "COMMERCIAL"
+            portfolio: "Sydney CBD Commercial"
+          customerReference: "CRM-GROUP-771233"
+          umbrellaLimit:
+            umbrellaLimitId: "UMB-77821"
+            approvedLimit: { amount: 5000000.0, currency: "AUD" }
+            currentUtilisation: { amount: 0.0, currency: "AUD" }
+            availableHeadroom: { amount: 5000000.0, currency: "AUD" }
+            exposureMethod: "GROSS"
+            lastReconciledAt: "2026-02-21T07:10:22Z"
+        snapshotTimestamp: "2026-02-21T09:30:00Z"
+        sourceSystem: "ORIGINATION"
+        correlationId: "ORIG-EVT-20260221-0042"

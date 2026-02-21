@@ -6397,3 +6397,1582 @@ CONSTRAINTS — NEVER VIOLATE THESE
   key namespaces — do not create separate tables per keyspace
 - Do not analyse or implement any other capability dimension
 ═══════════════════════════════════════════════════════════════
+
+
+
+═══════════════════════════════════════════════════════════════
+SYSTEM ROLE
+═══════════════════════════════════════════════════════════════
+You are a senior frontend architect specializing in enterprise
+workflow and case management UIs. You have built production
+interfaces for Pega, Appian, ServiceNow, and Salesforce. You
+write production-ready React code with exceptional UX polish,
+accessibility, and performance. You understand complex state
+management, real-time updates, and data-heavy enterprise apps.
+
+═══════════════════════════════════════════════════════════════
+PROJECT CONTEXT
+═══════════════════════════════════════════════════════════════
+I have built a complete loan origination workflow engine in Go
+with Postgres. It implements all enterprise case management
+capabilities:
+  ✓ Case lifecycle management
+  ✓ Work assignment & routing (skill-based, workbaskets, delegation)
+  ✓ SLA & deadline management (business calendar, breach detection)
+  ✓ Approval & decision gates (chains, authority limits, rework)
+  ✓ Correspondence & notifications (multi-channel, templates)
+  ✓ Document & data management (versioning, verification, propagation)
+  ✓ Audit, compliance & regulatory (immutable log, GDPR, 4-eyes)
+  ✓ Exception handling (DLQ, circuit breaker)
+  ✓ Reporting & operational visibility
+  ✓ Versioning & config governance
+  ✓ Multi-tenancy & partitioning
+  ✓ Integration & extensibility (webhooks, callbacks)
+
+The backend exposes REST APIs for all operations. I need a
+modern, production-grade React frontend.
+
+═══════════════════════════════════════════════════════════════
+TECHNICAL STACK
+═══════════════════════════════════════════════════════════════
+Framework       : React 18+ (functional components, hooks)
+Styling         : Tailwind CSS 3+ (custom design system)
+State           : React Query (TanStack Query) for server state
+                  Zustand for client state (if needed)
+Routing         : React Router v6
+Forms           : React Hook Form + Zod validation
+Tables          : TanStack Table (formerly React Table)
+Charts          : Recharts or Chart.js
+Icons           : Lucide React (modern, clean icon set)
+Date/Time       : date-fns or day.js
+Notifications   : React Hot Toast or Sonner
+Build           : Vite (fast dev server, optimized builds)
+TypeScript      : Required — full type safety
+
+DO NOT USE:
+  - Material-UI (too heavy, generic look)
+  - Ant Design (not modern enough)
+  - Bootstrap (dated aesthetic)
+  - Class components (use hooks only)
+
+═══════════════════════════════════════════════════════════════
+DESIGN REQUIREMENTS
+═══════════════════════════════════════════════════════════════
+Visual Style    : Modern, clean, professional — NOT generic
+                  Think Notion, Linear, Vercel, or Stripe aesthetic
+                  Avoid "enterprise grey" blandness
+
+Color Palette   : Define a cohesive palette with:
+                  - Primary: brand color (suggest modern blue or purple)
+                  - Secondary: accent color
+                  - Semantic: success (green), warning (amber),
+                    danger (red), info (blue)
+                  - Neutrals: 8-10 shades of grey for backgrounds,
+                    borders, text
+                  Use Tailwind's color customization
+
+Typography      : Inter or Geist for UI text (clean, readable)
+                  JetBrains Mono or Fira Code for code/IDs
+                  Clear hierarchy: headings, body, captions, labels
+
+Layout          : Sidebar navigation (collapsible)
+                  Top bar with user menu, notifications, search
+                  Main content area with breadcrumbs
+                  Consistent spacing (use Tailwind spacing scale)
+
+Components      : All components must be:
+                  - Accessible (ARIA labels, keyboard navigation)
+                  - Responsive (mobile-first, breakpoints at sm/md/lg/xl)
+                  - Performant (virtualized lists for 1000+ items)
+                  - Consistent (shared design system tokens)
+
+Animation       : Subtle, purposeful motion:
+                  - Page transitions (fade, slide)
+                  - Loading states (skeleton screens, NOT spinners)
+                  - Hover effects (scale, shadow, color shift)
+                  - Status changes (smooth color transitions)
+                  Use Framer Motion or Tailwind transitions
+
+Dark Mode       : Optional but recommended — use Tailwind's dark: prefix
+
+═══════════════════════════════════════════════════════════════
+CORE USER PERSONAS & USE CASES
+═══════════════════════════════════════════════════════════════
+1. LOAN OFFICER (Primary User)
+   - Views: My Cases, My Team's Cases, Workbasket Cases
+   - Actions: Claim tasks, complete tasks, upload documents,
+     request approvals, send notifications
+   - Needs: Fast access to next task, clear SLA indicators,
+     document checklist, case timeline
+
+2. CREDIT ANALYST
+   - Views: Cases awaiting credit review, High-priority cases
+   - Actions: Run credit checks, verify documents, approve/reject
+   - Needs: Credit score trends, document verification queue,
+     approval history
+
+3. UNDERWRITER
+   - Views: Cases in underwriting stage, Cases requiring approval
+   - Actions: Approve/reject loans, request additional docs,
+     set authority limits, delegate approvals
+   - Needs: Approval chains, risk indicators, decision audit trail
+
+4. SUPERVISOR / MANAGER
+   - Views: Team performance, SLA breach report, Exception cases
+   - Actions: Reassign cases, override decisions, place regulatory
+     holds, run compliance reports
+   - Needs: Dashboard with metrics, team workload view, anomaly alerts
+
+5. COMPLIANCE OFFICER
+   - Views: Audit logs, Regulatory holds, Data erasure requests
+   - Actions: Run reports, place/release holds, approve dual-control
+     requests, verify audit integrity
+   - Needs: Compliance dashboard, audit trail viewer, erasure queue
+
+═══════════════════════════════════════════════════════════════
+REQUIRED VIEWS & FEATURES — PRIORITY ORDER
+═══════════════════════════════════════════════════════════════
+
+## PHASE 1 — CORE CASE WORKBENCH (Build This First)
+
+### 1. Case List View (My Cases)
+The primary landing page for most users.
+
+Layout:
+  - Filter bar (top):
+    - Quick filters: My Cases, Team Cases, All Cases (tabs)
+    - Status filter (multi-select dropdown)
+    - Stage filter (multi-select dropdown)
+    - Case type filter
+    - Date range picker (created_at, updated_at)
+    - Full-text search (case reference number, borrower name)
+    - Advanced filters (expandable): SLA status, priority,
+      assigned to, tags
+  - Table (main):
+    - Columns: Reference Number, Borrower Name, Case Type,
+      Current Stage, Status, Priority, Assigned To, SLA Status,
+      Created At, Updated At, Actions
+    - SLA Status: visual indicator (green = on track, amber = warning,
+      red = breached) with remaining time tooltip
+    - Priority: colored badge (CRITICAL = red, HIGH = orange,
+      NORMAL = blue, LOW = grey)
+    - Status: colored badge with icon
+    - Actions: Quick actions dropdown (View, Claim, Reassign)
+  - Pagination (bottom): Show 25/50/100 per page, total count
+  - Bulk actions: Select multiple cases → Reassign, Export, Tag
+
+Design:
+  - Sticky header row
+  - Row hover effect (subtle shadow + background color shift)
+  - Row click → navigate to Case Detail
+  - Empty state (if no cases): friendly illustration + CTA
+  - Loading state: skeleton rows (NOT spinner)
+  - Virtualized scrolling for 1000+ rows (use TanStack Virtual)
+
+API Endpoints Needed:
+  GET /api/cases?assignedTo={userId}&status=IN_PROGRESS&page=1&limit=50
+  GET /api/cases/team?teamId={teamId}
+  GET /api/cases/workbasket?workbasketId={id}
+
+### 2. Case Detail View (Case Workbench)
+The heart of the application — where work happens.
+
+Layout (use a tab-based interface):
+
+  TAB 1: OVERVIEW
+    - Case header (sticky):
+      - Reference number (large, copyable)
+      - Status badge, Priority badge
+      - Borrower name, Case type
+      - Actions: Suspend, Withdraw, Emergency Close (icon buttons)
+      - SLA progress bar with time remaining
+    - Case summary card:
+      - Key metadata: Loan amount, Product type, Channel, Officer
+      - Case timeline (mini version): Created → Current Stage → Target Close
+    - Current stage card:
+      - Stage name, description
+      - Progress: "3 of 5 tasks completed"
+      - Activity breakdown: accordion with each activity + its tasks
+    - Quick actions:
+      - Next Task button (primary CTA, large, prominent)
+      - Request Approval, Upload Document, Send Notification
+
+  TAB 2: TASKS
+    - Task list (grouped by activity):
+      - Each task card shows: Name, Status, Priority, Assignee,
+        Due date, SLA indicator
+      - Expandable: click to show input/output payload in JSON viewer
+      - Actions: Claim, Complete, Reassign, View Details
+    - Task detail modal (when clicked):
+      - Task metadata (status, created/started/completed times)
+      - Input payload (formatted JSON or form fields)
+      - Output payload (editable if status = IN_PROGRESS)
+      - Schema validation errors (if any)
+      - Action buttons: Save Draft, Complete Task, Cancel
+
+  TAB 3: DOCUMENTS
+    - Document checklist:
+      - Required documents (from document_requests)
+      - Each doc type shows: Name, Status (Pending/Uploaded/Verified),
+        Count (2 of 3 uploaded), Due stage
+      - Upload button → file picker modal
+    - Uploaded documents table:
+      - Columns: Filename, Type, Size, Uploaded By, Uploaded At,
+        Status, Version, Actions
+      - Status: badge (Uploaded/Verified/Rejected/Archived)
+      - Actions: Download, View, Verify (if verifier), Reject,
+        Upload New Version
+      - Document viewer modal: PDF preview, image viewer, metadata panel
+
+  TAB 4: APPROVALS
+    - Approval chain visualization (if case has approval gates):
+      - Flow diagram showing tiers/levels
+      - Each node shows: Approver(s), Status, Decision, Timestamp
+      - Color-coded: Pending (grey), Approved (green), Rejected (red)
+    - Pending approvals (if current user is approver):
+      - Card per approval request with: Context, Amount (if applicable),
+        Requested by, Expires in
+      - Actions: Approve, Reject, Delegate (modals for each)
+    - Approval history: timeline of all approval decisions
+
+  TAB 5: TIMELINE / HISTORY
+    - Vertical timeline (newest first):
+      - Each entry: Icon, Event type, Actor, Timestamp, Description
+      - Event types: Case created, Stage changed, Task completed,
+        Document uploaded, Approval granted, SLA warning, etc.
+      - Expandable: show before/after changes (from audit_log)
+      - Filter by: Event type, Actor, Date range
+    - Export timeline as CSV or PDF
+
+  TAB 6: COMMUNICATIONS
+    - Sent notifications list:
+      - Each row: Channel (icon), Recipient, Subject, Sent at,
+        Status (Sent/Failed), Acknowledged
+      - Click to view notification body
+      - Resend button (if failed)
+    - Send notification (action):
+      - Template selector, Recipient input, Preview, Send
+
+Design:
+  - Sticky header with case context (reference number, borrower)
+  - Tabs use underline indicator, NOT background color
+  - Each tab uses skeleton loading on first load
+  - Use accordions for collapsible sections (activities, doc types)
+  - Consistent card design across all tabs
+  - Action buttons: Primary (filled), Secondary (outline), Tertiary (ghost)
+
+API Endpoints Needed:
+  GET /api/cases/{id}
+  GET /api/cases/{id}/tasks
+  GET /api/cases/{id}/documents
+  GET /api/cases/{id}/approvals
+  GET /api/cases/{id}/timeline
+  GET /api/cases/{id}/notifications
+  POST /api/tasks/{id}/complete
+  POST /api/documents/upload
+  POST /api/approvals/{id}/approve
+  POST /api/approvals/{id}/reject
+
+### 3. Task Workbench (Complete Task Modal)
+When a user clicks "Complete Task" or claims a task.
+
+Layout:
+  - Modal (full-screen on mobile, 75% width on desktop)
+  - Task header:
+    - Task name, Case reference (link to case)
+    - Status, Priority, Due date, Time remaining
+  - Task form:
+    - Dynamic form fields based on task_definition.output_schema
+    - Field types: text, number, select, date, file upload, textarea
+    - Validation: real-time with Zod schema from backend
+    - Conditional fields (show/hide based on other field values)
+    - Computed fields (auto-calculate based on inputs)
+  - Input data panel (collapsible sidebar):
+    - Shows task.input_payload in read-only JSON viewer
+    - Allows copying values into output form
+  - Action bar (sticky bottom):
+    - Cancel, Save Draft, Complete Task (primary)
+    - Submit disabled until validation passes
+
+Design:
+  - Two-column layout: Form (left 70%), Input panel (right 30%)
+  - Form fields use Tailwind form plugin styling
+  - Validation errors: inline below field, red border, error icon
+  - Success message on complete: toast notification + redirect
+
+API Endpoints Needed:
+  GET /api/tasks/{id}
+  PUT /api/tasks/{id}
+  POST /api/tasks/{id}/complete
+
+### 4. Workbasket View
+For team-based work queues.
+
+Layout:
+  - Workbasket selector (dropdown or sidebar):
+    - List of workbaskets the user is a member of
+    - Each shows: Name, Type (General/Specialist/Escalation),
+      Depth (task count), Oldest task age
+  - Task list (similar to Case List but task-focused):
+    - Columns: Task Name, Case Reference, Priority, Due Date,
+      SLA Status, Waiting Since
+    - Sort by: Priority DESC, Due Date ASC (default)
+    - Actions: Claim Task (primary CTA)
+  - Claim action:
+    - Removes from workbasket, assigns to user, navigates to Task Workbench
+
+Design:
+  - ESCALATION workbaskets use red/amber color theme (urgent feel)
+  - Empty workbasket: "All caught up!" celebratory message
+  - Depth indicator: color-coded (< 10 = green, 10-50 = amber, > 50 = red)
+
+API Endpoints Needed:
+  GET /api/workbaskets
+  GET /api/workbaskets/{id}/tasks
+  POST /api/tasks/{id}/claim
+
+═══════════════════════════════════════════════════════════════
+
+## PHASE 2 — DASHBOARDS & ANALYTICS
+
+### 5. Personal Dashboard (Home)
+User's personalized landing page.
+
+Layout (grid of cards):
+  - My Work Summary (top left):
+    - Tasks due today: count + list
+    - Tasks overdue: count + list (red)
+    - Cases awaiting my approval: count
+    - Quick link to My Cases
+  - SLA Performance (top right):
+    - Gauge chart: % on-time completion (this week)
+    - Trend line: last 4 weeks
+    - Breach count this week
+  - Recent Activity (bottom left):
+    - Last 5 cases I worked on
+    - Last 5 tasks I completed
+  - Team Updates (bottom right):
+    - Team announcements (if any)
+    - Top performers this week (gamification)
+
+Design:
+  - Cards with subtle shadow, rounded corners
+  - Use chart colors from semantic palette
+  - Each card has a "View All" link
+
+API Endpoints Needed:
+  GET /api/dashboard/personal
+
+### 6. Team Dashboard (for Supervisors)
+Team performance overview.
+
+Layout:
+  - KPI cards (top row):
+    - Total cases (active), Cases completed (this week),
+      Avg resolution time, SLA compliance %
+  - Charts (middle):
+    - Case throughput (line chart, last 30 days)
+    - Cases by stage (funnel chart)
+    - SLA breach trend (bar chart, by week)
+  - Team workload table (bottom):
+    - Rows: Team members
+    - Columns: Active cases, Tasks in progress, Tasks completed today,
+      Avg handle time, SLA compliance %
+    - Sort by any column
+
+Design:
+  - Responsive grid: 4 cols on xl, 2 cols on md, 1 col on sm
+  - Charts use consistent color palette
+  - KPI cards show trend indicator (up/down arrow + %)
+
+API Endpoints Needed:
+  GET /api/dashboard/team
+
+### 7. Compliance Dashboard (for Compliance Officers)
+Regulatory and audit overview.
+
+Layout:
+  - Compliance KPIs (top):
+    - Cases under regulatory hold, Pending dual-control requests,
+      Pending erasure requests, Audit log integrity status
+  - Alerts (middle):
+    - Suspicious access events (last 24h)
+    - Recent SLA breaches (> 50% over)
+    - Failed compliance report executions
+  - Recent actions (bottom):
+    - Last 10 regulatory holds placed/released
+    - Last 10 dual-control authorizations
+    - Last 10 data erasure completions
+
+Design:
+  - Use warning colors (amber/red) for alerts
+  - Audit integrity status: large badge (VALID = green, COMPROMISED = red)
+  - Quick action buttons: Run Report, Place Hold, Verify Integrity
+
+API Endpoints Needed:
+  GET /api/dashboard/compliance
+
+═══════════════════════════════════════════════════════════════
+
+## PHASE 3 — ADMIN & CONFIGURATION
+
+### 8. Case Type Configuration
+For admins to manage case type definitions.
+
+Layout:
+  - Case type list (sidebar):
+    - Each shows: Code, Name, Version, Status
+    - Filter by status (Active/Draft/Deprecated)
+  - Case type editor (main):
+    - Tabs: General, Stages, Activities, Tasks, Documents, Approvals
+    - JSON editor with syntax highlighting (use Monaco Editor or CodeMirror)
+    - Visual designer option (drag-and-drop stage flow)
+    - Validation: real-time schema check
+  - Actions: Save Draft, Activate, Create New Version, Deprecate
+
+Design:
+  - Two-pane layout: List (25% width), Editor (75% width)
+  - Unsaved changes warning before navigate
+  - Version diff viewer (compare two versions side-by-side)
+
+API Endpoints Needed:
+  GET /api/case-types
+  GET /api/case-types/{id}
+  PUT /api/case-types/{id}
+  POST /api/case-types
+
+### 9. User & Role Management
+Manage users, roles, permissions, authority limits.
+
+Layout:
+  - User list (table):
+    - Columns: Name, Email, Role(s), Status, Last Login
+    - Actions: Edit, Deactivate, Reset Password
+  - User detail (modal):
+    - Basic info, Assigned roles, Authority limits,
+      Workbasket memberships, Skills
+  - Role list (separate tab):
+    - Each role shows: Name, Permissions (expandable list)
+    - Actions: Edit, Delete
+
+Design:
+  - Use multi-select for role assignment
+  - Authority limits: editable table (Type, Max Amount, Expires At)
+
+API Endpoints Needed:
+  GET /api/users
+  GET /api/users/{id}
+  PUT /api/users/{id}
+  GET /api/roles
+
+═══════════════════════════════════════════════════════════════
+
+## SHARED COMPONENTS TO BUILD
+
+1. **Layout Components**
+   - AppShell: sidebar + topbar + main content
+   - Sidebar: collapsible, active item indicator
+   - Topbar: search, notifications bell, user menu
+
+2. **Data Display**
+   - DataTable: sortable, filterable, paginated, virtualized
+   - Card: consistent shadow, padding, rounded corners
+   - Badge: status, priority, SLA indicator
+   - Timeline: vertical event list with icons
+   - StatCard: KPI display with trend indicator
+
+3. **Forms & Inputs**
+   - TextInput, NumberInput, Select, DatePicker, FileUpload
+   - FormField: wraps input with label, error, help text
+   - DynamicForm: generates form from JSON schema
+
+4. **Feedback**
+   - Toast: success, error, warning, info notifications
+   - Modal: sizes (sm/md/lg/full), with/without footer
+   - ConfirmDialog: "Are you sure?" with actions
+   - LoadingSkeleton: for cards, tables, forms
+   - EmptyState: illustration + message + CTA
+
+5. **Navigation**
+   - Breadcrumbs: auto-generated from route
+   - Tabs: underline indicator, keyboard navigation
+   - Pagination: with page size selector
+
+6. **Domain-Specific**
+   - SLAIndicator: colored badge with time remaining
+   - StatusBadge: case/task status with icon
+   - PriorityBadge: color-coded priority
+   - CaseTimeline: vertical timeline of case events
+   - ApprovalChainViewer: flow diagram of approval tiers
+   - DocumentChecklist: required docs with status
+
+═══════════════════════════════════════════════════════════════
+
+## IMPLEMENTATION REQUIREMENTS
+
+### Code Quality
+- All components in TypeScript with proper types
+- Use custom hooks for data fetching (useCase, useTasks, etc.)
+- Use React Query for caching, auto-refetch, optimistic updates
+- Use Zod for runtime validation
+- ESLint + Prettier configured
+- Component tests with React Testing Library (at least for critical paths)
+
+### Performance
+- Lazy load routes (React.lazy + Suspense)
+- Virtualize large lists (TanStack Virtual)
+- Debounce search inputs (300ms)
+- Memoize expensive computations (useMemo, useCallback)
+- Code split by route
+- Image optimization (use next/image patterns or similar)
+
+### Accessibility
+- All interactive elements keyboard accessible
+- ARIA labels on all icons and actions
+- Focus management in modals
+- Color contrast WCAG AA minimum
+- Screen reader tested (at least for core flows)
+
+### State Management
+- Server state: React Query (cache cases, tasks, etc.)
+- Client state: Zustand (sidebar collapsed, theme, filters)
+- Form state: React Hook Form
+- URL state: React Router (search params for filters)
+
+### Real-Time Updates
+- WebSocket or SSE for live case updates (optional Phase 4)
+- Use React Query's refetchInterval for polling (every 30s)
+- Optimistic updates on mutations (claim task, complete task)
+
+═══════════════════════════════════════════════════════════════
+
+## DELIVERABLES
+
+For EACH view/component requested, provide:
+
+1. **Component Code**
+   - Full TypeScript React component
+   - Tailwind CSS classes (NO inline styles)
+   - Props interface with JSDoc comments
+   - Accessibility attributes
+
+2. **API Integration**
+   - React Query hook (useQuery, useMutation)
+   - Type definitions for API responses
+   - Error handling (display error toast)
+   - Loading states (skeleton, spinner, disabled)
+
+3. **Tests (optional but recommended)**
+   - At least one happy path test
+   - Edge case (empty state, error state)
+
+4. **Usage Example**
+   - How to import and use the component
+   - Example props
+
+5. **Design Justification**
+   - Brief explanation of UX decisions
+   - Any trade-offs made
+
+═══════════════════════════════════════════════════════════════
+
+## START WITH THIS
+
+Build Phase 1 components in this order:
+1. AppShell (layout foundation)
+2. Case List View (main landing page)
+3. Case Detail View - Overview tab (most important view)
+4. Task Workbench (where work happens)
+5. Case Detail View - remaining tabs
+
+Provide production-ready code — NOT pseudocode, NOT "implement this",
+NOT TODO comments. Every component should run immediately when
+copy-pasted into a React + Tailwind + TypeScript project.
+
+Use modern, delightful UX patterns. Avoid generic enterprise blandness.
+Make it feel like a tool people WANT to use, not have to use.
+
+═══════════════════════════════════════════════════════════════
+SYSTEM ROLE
+═══════════════════════════════════════════════════════════════
+You are a principal architect with 15+ years delivering enterprise
+case management platforms on Pega, Appian, IBM BPM, and Camunda.
+You write production Go code, not pseudocode. You never produce
+placeholders, TODOs, or "implement this later" stubs. Every
+function you write compiles, handles errors explicitly, and is
+consistent with the existing codebase conventions below.
+You have deep expertise in SCIM 2.0 (RFC 7643 and RFC 7644),
+identity provider integration, and enterprise directory
+synchronisation. Every SCIM endpoint you produce is fully
+spec-compliant — correct HTTP status codes, correct error
+schemas, correct attribute handling, and correct filter
+parsing.
+
+═══════════════════════════════════════════════════════════════
+PROJECT CONTEXT — DO NOT REDEFINE THESE
+═══════════════════════════════════════════════════════════════
+Language      : Go (primary workflow engine)
+Database      : Postgres (choreography hub / queue)
+Architecture  : Choreography pattern — no central orchestrator
+                commanding services; services react to events
+Scale target  : 100,000 cases / 1,000,000 events per day
+Style         : sqlx for DB access, structured logging (zerolog
+                or slog), context propagation on all functions,
+                typed enums (not raw strings), transactional
+                outbox for all cross-service events
+
+CANONICAL DOMAIN MODEL (frozen — do not alter these definitions):
+
+  CaseType   Versioned blueprint. Defines stages (ordered),
+             activities (config-defined groupings within a stage),
+             and task definitions (what work exists per activity).
+             A case_type has a code, version, and a JSONB config
+             blob. Status: DRAFT | ACTIVE | DEPRECATED.
+
+  Case       Runtime instance of a CaseType. Top-level parent
+             entity — one loan application = one Case. May have
+             child sub-Cases (e.g. CREDIT_CHECK is a child of
+             HOME_LOAN with parent_case_id set). Tracks
+             current_stage_code and current_stage_ordinal.
+
+  Stage      Ordered progress marker on a Case. Stages do NOT
+             perform work — they record where a Case is. Moving
+             to a lower ordinal = regression (case went back in
+             time). Every transition is recorded in
+             case_stage_transitions with is_regression flag.
+
+  Activity   Config-defined logical grouping of Tasks within a
+             Stage. NOT a runtime entity. Not created by the
+             workflow engine at runtime. Exists in case_type
+             config and activity_definitions table only. Tasks
+             reference their activity_code as a denormalised
+             string. Grouping is derived, not stored.
+
+  Task       Atomic unit of work. Stores everything: input_payload,
+             output_payload, metadata, error_detail (all JSONB),
+             status, priority, assigned_service, retry_count,
+             idempotency_key, version (optimistic lock). The
+             primary object that workers consume from the queue.
+
+USER MANAGEMENT DOMAIN (established in the User and Team
+Management capability — do not redefine):
+
+  User       Human actor. Fields: user_id, tenant_id,
+             username, email, display_name, status
+             (ACTIVE | SUSPENDED | DEACTIVATED), auth_provider
+             (LOCAL | OIDC | SAML), external_id, timezone,
+             locale, last_login_at, metadata, created_at,
+             updated_at.
+
+  Role       Tenant-scoped permission set. Fields: role_id,
+             tenant_id, role_code, display_name, permissions
+             (text[]), is_system_role.
+
+  Team       Named user grouping. Fields: team_id, tenant_id,
+             team_code, display_name, team_type, status
+             (ACTIVE | DISBANDED).
+
+═══════════════════════════════════════════════════════════════
+CODEBASE CONVENTIONS — MATCH THESE EXACTLY
+═══════════════════════════════════════════════════════════════
+- All DB functions:
+    func Name(ctx context.Context, db *sqlx.DB, ...) (T, error)
+- All transactional functions:
+    func Name(ctx context.Context, tx *sqlx.Tx, ...) error
+- HTTP handlers follow standard net/http signatures:
+    func (h *SCIMHandler) MethodResource(
+        w http.ResponseWriter, r *http.Request)
+- Status/type fields: typed Go string enums with const blocks
+- Migrations: sequential numbered files using golang-migrate
+  conventions — UP and DOWN in separate files
+  (e.g. 016_add_scim.up.sql / 016_add_scim.down.sql)
+- Event publishing: always via PublishEvent(ctx, tx, event)
+  inside the same transaction as the state change (outbox)
+- Worker polling: SELECT FOR UPDATE SKIP LOCKED
+- No N+1 queries — batch or join at the SQL layer
+- Tests: table-driven, testify/assert, DB mocked with sqlmock
+- Error wrapping: fmt.Errorf("functionName: %w", err)
+- Time handling: all timestamps stored as timestamptz in UTC;
+  SCIM dateTime fields serialised as RFC 3339 UTC strings
+
+═══════════════════════════════════════════════════════════════
+SCIM SPECIFICATION CONSTRAINTS
+These apply to every endpoint produced in this session.
+Non-compliance with any of these is a P1 defect.
+═══════════════════════════════════════════════════════════════
+- Base path  : /scim/v2  (all endpoints are beneath this)
+- Content-Type: application/scim+json on all responses
+- All SCIM responses include schemas, id, meta.resourceType,
+  meta.created, meta.lastModified, meta.location, meta.version
+- HTTP 200 for GET and successful PATCH/PUT
+- HTTP 201 for successful POST (resource created)
+- HTTP 204 for successful DELETE
+- HTTP 400 for invalid request (scimType: invalidValue,
+  invalidFilter, tooMany, uniqueness, mutability,
+  invalidSyntax, invalidPath, noTarget, invalidVers,
+  sensitive)
+- HTTP 401 for missing or invalid bearer token
+- HTTP 403 for valid token with insufficient scope
+- HTTP 404 for resource not found
+- HTTP 409 for uniqueness constraint violation
+- HTTP 412 for ETag / version mismatch (optimistic lock)
+- HTTP 422 for invalid patch operation
+- HTTP 429 for rate limit exceeded
+- All error responses use the SCIM error schema:
+    {"schemas":["urn:ietf:params:scim:api:messages:2.0:Error"],
+     "status":"<HTTP status code as string>",
+     "scimType":"<scimType if applicable>",
+     "detail":"<human-readable message>"}
+- Filtering: support the SCIM filter grammar (RFC 7644 §3.4.2)
+  for at minimum: eq, ne, co, sw, ew, pr, gt, ge, lt, le,
+  and, or, not operators on User attributes
+- Sorting: support sortBy and sortOrder (ascending/descending)
+  on User and Group list endpoints
+- Pagination: startIndex (1-based) and count parameters;
+  responses include totalResults, startIndex, itemsPerPage
+- Attribute projection: attributes and excludedAttributes
+  query parameters must be respected — return only the
+  requested attributes, never more
+- Bulk operations: support up to 1000 operations per bulk
+  request; respect failOnErrors parameter
+- ETag: every resource response includes ETag header set to
+  meta.version; conditional requests (If-Match, If-None-Match)
+  must be honoured
+- PATCH uses JSON Patch operations per RFC 7644 §3.5.2:
+  add, remove, replace on individual attributes and
+  multi-valued attributes
+- Schema discovery endpoints must return accurate, complete
+  schema documents — not stubs
+
+═══════════════════════════════════════════════════════════════
+CURRENT IMPLEMENTATION
+═══════════════════════════════════════════════════════════════
+All DDL migration files are in:
+  C:\MyProjects\MyLoanOriginationWorkflowApp\workflow-engine-go\db
+
+All current Go structs and key functions are in the project
+folder open in this session.
+
+Read and understand the full existing implementation before
+producing any output. Do not restate or summarise what you
+read — proceed directly to the gap analysis and then the
+implementation.
+
+═══════════════════════════════════════════════════════════════
+CAPABILITY UNDER REVIEW
+SCIM 2.0 COMPLIANT APIs (USER MANAGEMENT)
+═══════════════════════════════════════════════════════════════
+Scope: analyse, then fully implement, the SCIM 2.0 COMPLIANT
+APIs capability dimension only.
+
+Do not analyse or produce code for any other capability
+dimension.
+
+STEP 1 — GAP ANALYSIS
+──────────────────────
+Compare the current implementation against the full enterprise-
+grade capability set for SCIM 2.0 compliant user management
+APIs. Structure your gap analysis as a table with these columns:
+
+  Sub-Capability | Current State | Gap | Severity (P1/P2/P3)
+
+Sub-capabilities to cover (ALL of them):
+
+  1. SCIM bearer token authentication
+     Every SCIM request must present a bearer token in the
+     Authorization header. Tokens are tenant-scoped — a token
+     issued to Tenant A cannot access Tenant B's SCIM
+     endpoints. Store SCIM tokens in a scim_tokens table:
+       - token_id (PK, UUID)
+       - tenant_id (FK)
+       - token_hash (text — SHA-256 hash of the raw token;
+           raw token is never stored)
+       - description (text — human label, e.g. "Okta
+           provisioning token")
+       - scopes (text[] — e.g. {"users:read","users:write",
+           "groups:read","groups:write"})
+       - status: ACTIVE | REVOKED
+       - last_used_at (nullable timestamptz)
+       - expires_at (nullable timestamptz — null = no expiry)
+       - created_by (text — user or service that created it)
+       - created_at, updated_at (timestamptz)
+
+     Produce:
+
+       func CreateSCIMToken(
+           ctx         context.Context,
+           db          *sqlx.DB,
+           tenantID    string,
+           description string,
+           scopes      []string,
+           expiresAt   *time.Time,
+           createdBy   string,
+       ) (rawToken string, err error)
+       // Generates a cryptographically random 32-byte token.
+       // Stores only the SHA-256 hash. Returns the raw token
+       // once — it cannot be recovered after this call.
+       // Publishes SCIM_TOKEN_CREATED event via outbox.
+
+       func RevokeSCIMToken(
+           ctx      context.Context,
+           db       *sqlx.DB,
+           tokenID  string,
+           tenantID string,
+       ) error
+       // Sets status = REVOKED. Publishes SCIM_TOKEN_REVOKED.
+
+       func ValidateSCIMToken(
+           ctx      context.Context,
+           db       *sqlx.DB,
+           rawToken string,
+       ) (SCIMTokenClaims, error)
+       // Hashes the raw token, queries scim_tokens by hash.
+       // Validates: status = ACTIVE, not expired.
+       // Updates last_used_at in a non-blocking background
+       // write (same LoginTracker pattern — do not block
+       // the request path).
+       // Returns SCIMTokenClaims: tenant_id, scopes, token_id.
+       // Returns ErrSCIMTokenInvalid on any validation failure
+       // — do not distinguish between not-found, revoked, and
+       // expired in the error (prevents token oracle attacks).
+
+     SCIMMiddleware:
+
+       func SCIMMiddleware(
+           db   *sqlx.DB,
+           next http.Handler,
+       ) http.Handler
+       // Extracts Bearer token from Authorization header.
+       // Calls ValidateSCIMToken.
+       // On failure: responds HTTP 401 with SCIM error schema.
+       // On success: injects SCIMTokenClaims into ctx via
+       // WithSCIMClaims. Also injects tenant_id via
+       // WithTenant (from multi-tenancy capability) so all
+       // downstream DB calls are automatically tenant-scoped.
+
+       func SCIMScopeMiddleware(
+           requiredScope string,
+           next          http.Handler,
+       ) http.Handler
+       // Extracts SCIMTokenClaims from ctx.
+       // Checks required scope is present.
+       // On failure: responds HTTP 403 with SCIM error schema.
+
+  2. SCIM User resource — full CRUD
+     Map the SCIM User schema (RFC 7643 §4.1) to the
+     internal User model. The SCIM User resource at minimum
+     supports these attributes:
+
+       SCIM attribute          → Internal field
+       ─────────────────────────────────────────
+       id                      → user_id
+       externalId              → external_id
+       userName                → username
+       displayName             → display_name
+       emails[primary].value   → email
+       active                  → status == ACTIVE
+       locale                  → locale
+       timezone                → timezone
+       meta.created            → created_at
+       meta.lastModified       → updated_at
+       meta.version            → version (ETag)
+       urn:workflow:User       → extension schema (see 2f)
+
+     Produce the following HTTP handlers (all under
+     /scim/v2/Users):
+
+     2a. GET /scim/v2/Users/:id
+         func (h *SCIMHandler) GetUser(
+             w http.ResponseWriter, r *http.Request)
+         // Returns the SCIM User resource for the given id.
+         // Respects If-None-Match header — return 304 if
+         // ETag matches.
+         // Returns 404 with SCIM error if not found.
+         // Requires scope: users:read
+
+     2b. GET /scim/v2/Users
+         func (h *SCIMHandler) ListUsers(
+             w http.ResponseWriter, r *http.Request)
+         // Parses filter, sortBy, sortOrder, startIndex,
+         // count, attributes, excludedAttributes from query.
+         // Executes filtered, sorted, paginated query.
+         // Returns SCIM ListResponse:
+         //   schemas, totalResults, startIndex,
+         //   itemsPerPage, Resources[]
+         // Returns 400 with scimType=invalidFilter if
+         // filter is malformed.
+         // Requires scope: users:read
+
+     2c. POST /scim/v2/Users
+         func (h *SCIMHandler) CreateUser(
+             w http.ResponseWriter, r *http.Request)
+         // Parses SCIM User from request body.
+         // Calls CreateUser from User Management capability.
+         // Returns 201 with Location header set to the
+         // new resource URL.
+         // Returns 409 with scimType=uniqueness if
+         // username or email is already taken.
+         // Requires scope: users:write
+
+     2d. PUT /scim/v2/Users/:id
+         func (h *SCIMHandler) ReplaceUser(
+             w http.ResponseWriter, r *http.Request)
+         // Full replacement of the User resource.
+         // Validates If-Match header — return 412 if
+         // ETag does not match current version.
+         // Immutable attributes (id, tenant_id,
+         // auth_provider, external_id) are ignored if
+         // present — not rejected, per SCIM spec
+         // (mutability: readOnly).
+         // Returns 200 with updated resource.
+         // Requires scope: users:write
+
+     2e. PATCH /scim/v2/Users/:id
+         func (h *SCIMHandler) PatchUser(
+             w http.ResponseWriter, r *http.Request)
+         // Applies JSON Patch operations per RFC 7644 §3.5.2.
+         // Supported operations: add, remove, replace.
+         // Supported paths: userName, displayName,
+         //   emails[primary].value, active, locale,
+         //   timezone, urn:workflow:User:roles,
+         //   urn:workflow:User:teamId
+         // Setting active=false maps to SuspendUser.
+         // Setting active=true maps to ReactivateUser.
+         // Returns 422 with SCIM error for invalid patch
+         // operations.
+         // Returns 400 with scimType=noTarget if path
+         // does not exist.
+         // Requires scope: users:write
+
+     2f. DELETE /scim/v2/Users/:id
+         func (h *SCIMHandler) DeleteUser(
+             w http.ResponseWriter, r *http.Request)
+         // Maps to DeactivateUser (soft delete — SCIM
+         // DELETE does not physically remove the user).
+         // Returns 204 on success.
+         // Returns 404 if user not found.
+         // Requires scope: users:write
+
+     2g. SCIM User extension schema
+         Define a custom enterprise extension:
+         urn:ietf:params:scim:schemas:extension:
+           workflow:2.0:User
+         Extension attributes:
+           tenantId     (string, readOnly)
+           roles        (multi-valued string — role_codes
+                         assigned to this user)
+           teamId       (string — primary team assignment)
+           timezone     (string — IANA timezone)
+           authProvider (string, readOnly — LOCAL|OIDC|SAML)
+         This extension is returned in the User resource
+         when the caller does not specify attributes
+         exclusion. It is writable for roles and teamId.
+
+  3. SCIM Group resource — full CRUD
+     Map Teams to SCIM Groups (RFC 7643 §4.2). Groups
+     represent Teams in the workflow engine.
+
+       SCIM attribute     → Internal field
+       ────────────────────────────────────
+       id                 → team_id
+       externalId         → (new field — see migration)
+       displayName        → display_name
+       members[].value    → user_id of team members
+       members[].display  → display_name of team member
+       meta.created       → created_at
+       meta.lastModified  → updated_at
+       meta.version       → version (ETag)
+
+     Add an external_id column to teams for IdP-side
+     group correlation (nullable, unique per tenant).
+
+     Produce the following HTTP handlers (all under
+     /scim/v2/Groups):
+
+     3a. GET /scim/v2/Groups/:id
+         func (h *SCIMHandler) GetGroup(
+             w http.ResponseWriter, r *http.Request)
+         // Returns SCIM Group with members[] populated.
+         // Members are fetched in the same query via JOIN
+         // — no N+1.
+         // Requires scope: groups:read
+
+     3b. GET /scim/v2/Groups
+         func (h *SCIMHandler) ListGroups(
+             w http.ResponseWriter, r *http.Request)
+         // Supports filter, sortBy, sortOrder,
+         // startIndex, count, attributes.
+         // Requires scope: groups:read
+
+     3c. POST /scim/v2/Groups
+         func (h *SCIMHandler) CreateGroup(
+             w http.ResponseWriter, r *http.Request)
+         // Creates a Team. members[] in the request body
+         // are processed as AddUserToTeam calls — all
+         // within the same transaction.
+         // Returns 201 with Location header.
+         // Requires scope: groups:write
+
+     3d. PUT /scim/v2/Groups/:id
+         func (h *SCIMHandler) ReplaceGroup(
+             w http.ResponseWriter, r *http.Request)
+         // Full replacement. Reconciles members[]:
+         //   - Users in request but not in team → add
+         //   - Users in team but not in request → remove
+         // All reconciliation in a single transaction.
+         // Validates If-Match ETag.
+         // Requires scope: groups:write
+
+     3e. PATCH /scim/v2/Groups/:id
+         func (h *SCIMHandler) PatchGroup(
+             w http.ResponseWriter, r *http.Request)
+         // Supported paths: displayName, members
+         // add members: AddUserToTeam for each
+         // remove members: RemoveUserFromTeam for each
+         // replace members: full reconciliation as in PUT
+         // Returns 422 for invalid patch op.
+         // Requires scope: groups:write
+
+     3f. DELETE /scim/v2/Groups/:id
+         func (h *SCIMHandler) DeleteGroup(
+             w http.ResponseWriter, r *http.Request)
+         // Maps to DisbandTeam.
+         // Returns 409 if team has open tasks
+         // (ErrTeamHasOpenTasks — disbanding blocked).
+         // Returns 204 on success.
+         // Requires scope: groups:write
+
+  4. SCIM filter parser and evaluator
+     The SCIM filter grammar (RFC 7644 §3.4.2) must be
+     parsed and translated to a SQL WHERE clause. Do not
+     use string concatenation — build parameterised queries.
+
+     Produce:
+
+       type SCIMFilter interface {
+           ToSQL(
+               resource SCIMResourceType,
+           ) (clause string, args []interface{}, err error)
+       }
+
+       func ParseSCIMFilter(
+           expression string,
+       ) (SCIMFilter, error)
+       // Parses the filter expression into an AST.
+       // Returns ErrInvalidSCIMFilter on syntax error.
+       // Supported operators for User:
+       //   eq, ne, co, sw, ew, pr, gt, ge, lt, le,
+       //   and, or, not
+       // Supported attributes for User filter:
+       //   userName, displayName, emails.value, active,
+       //   externalId, meta.created, meta.lastModified
+       // Supported attributes for Group filter:
+       //   displayName, externalId, members.value,
+       //   meta.created, meta.lastModified
+       // Attribute names are case-insensitive per spec.
+
+     Attribute-to-column mapping (User):
+       userName        → LOWER(u.username)
+       displayName     → u.display_name
+       emails.value    → LOWER(u.email)
+       active          → (u.status = 'ACTIVE')
+       externalId      → u.external_id
+       meta.created    → u.created_at
+       meta.lastModified → u.updated_at
+
+     The filter parser must:
+       - Reject filter expressions referencing attributes
+         not in the supported set (400 invalidFilter)
+       - Reject filter expressions exceeding 50 nodes
+         in the AST (400 scimType=tooMany — prevents
+         DoS via deeply nested filters)
+       - Never produce SQL with unparameterised values
+       - Handle string quoting and escaping per SCIM spec
+
+  5. SCIM bulk operations
+     POST /scim/v2/Bulk — process multiple SCIM operations
+     in a single request per RFC 7644 §3.7.
+
+     func (h *SCIMHandler) BulkOperation(
+         w http.ResponseWriter, r *http.Request)
+
+     Request body (BulkRequest):
+       schemas    : ["urn:ietf:params:scim:api:messages:
+                      2.0:BulkRequest"]
+       failOnErrors: integer (max errors before abort;
+                    0 = process all regardless of errors)
+       Operations : array of BulkOperation:
+         method   : POST | PUT | PATCH | DELETE
+         path     : e.g. "/Users" or "/Users/:id"
+         bulkId   : caller-assigned correlation ID
+         data     : the request body for this operation
+         version  : ETag for PUT/PATCH/DELETE
+
+     Response (BulkResponse):
+       schemas    : ["urn:ietf:params:scim:api:messages:
+                      2.0:BulkResponse"]
+       Operations : array of BulkOperationResponse:
+         method, location, bulkId, version, status,
+         response (the SCIM resource or error)
+
+     Rules:
+       - Max 1000 operations per request — return 400
+         scimType=tooMany if exceeded
+       - Operations are processed sequentially, not in
+         parallel — order is significant
+       - If failOnErrors = N, abort after N errors and
+         return results for completed operations only
+       - Each operation runs in its own transaction —
+         bulk is NOT one atomic transaction unless all
+         operations succeed and failOnErrors = 0
+       - bulkId references: if operation B's path
+         references "bulkId:abc" from operation A (which
+         created a user), resolve the created resource ID
+         before processing B
+       - Requires scope: users:write AND groups:write
+         (caller must have both to use bulk)
+
+  6. SCIM schema discovery endpoints
+     These are unauthenticated (or lightly authenticated)
+     endpoints that IdPs use to discover the server's
+     capabilities.
+
+     6a. GET /scim/v2/Schemas
+         Returns all supported schema documents as a
+         ListResponse. Must include:
+           urn:ietf:params:scim:schemas:core:2.0:User
+           urn:ietf:params:scim:schemas:core:2.0:Group
+           urn:ietf:params:scim:schemas:extension:
+             workflow:2.0:User
+
+     6b. GET /scim/v2/Schemas/:schemaId
+         Returns a single schema document by ID.
+         Returns 404 if schema ID is unknown.
+
+     6c. GET /scim/v2/ResourceTypes
+         Returns all resource types:
+           User (endpoint /Users, schema User)
+           Group (endpoint /Groups, schema Group)
+
+     6d. GET /scim/v2/ResourceTypes/:name
+
+     6e. GET /scim/v2/ServiceProviderConfig
+         Returns the server's capability declaration:
+           patch.supported           : true
+           bulk.supported            : true
+           bulk.maxOperations        : 1000
+           bulk.maxPayloadSize       : 1048576 (1MB)
+           filter.supported          : true
+           filter.maxResults         : 200
+           changePassword.supported  : false
+           sort.supported            : true
+           etag.supported            : true
+           authenticationSchemes     : [{type: oauthbearertoken}]
+
+     Schema documents must be complete and accurate —
+     every attribute listed in sub-capabilities 2 and 3
+     must appear in the schema with correct mutability
+     (readOnly | readWrite | immutable | writeOnly),
+     returned (always | default | never | request), and
+     uniqueness (none | server | global) values.
+
+  7. ETag and conditional request handling
+     Every mutable SCIM resource (User and Group) has a
+     version field used as the ETag. This maps to the
+     existing optimistic lock version column on users
+     and teams.
+
+     Produce:
+
+       func SCIMETag(version int) string
+       // Returns the ETag value: W/"<version>"
+       // (weak ETag per RFC 7232)
+
+       func ParseIfMatch(
+           header string,
+       ) (version int, err error)
+       // Parses the If-Match header value W/"<version>"
+       // and returns the integer version.
+       // Returns ErrInvalidETag on malformed header.
+
+       func ValidateIfMatch(
+           ctx     context.Context,
+           db      *sqlx.DB,
+           userID  string,
+           tenantID string,
+           header  string,
+       ) error
+       // Fetches the current resource version from DB.
+       // Returns ErrETagMismatch if version differs from
+       // If-Match header value.
+       // Called at the top of ReplaceUser, PatchUser,
+       // ReplaceGroup, PatchGroup, and bulk PUT/PATCH ops.
+
+       func HandleIfNoneMatch(
+           currentVersion int,
+           header         string,
+       ) bool
+       // Returns true if the resource has NOT changed
+       // (i.e. ETag matches If-None-Match → return 304).
+
+     All GET handlers check If-None-Match and return 304
+     with no body if the resource has not changed.
+     All mutating handlers check If-Match and return 412
+     if the ETag does not match.
+
+  8. SCIM audit log
+     Every SCIM operation is recorded in a scim_audit_log
+     table (append-only):
+       - audit_id (PK, UUID)
+       - tenant_id (FK)
+       - token_id (FK to scim_tokens — which token was used)
+       - operation: GET | POST | PUT | PATCH | DELETE | BULK
+       - resource_type: USER | GROUP | SCHEMA |
+                        RESOURCE_TYPE | SERVICE_PROVIDER_CONFIG
+       - resource_id (nullable — the SCIM resource id)
+       - http_status (integer — the response status code)
+       - filter_expression (nullable — the filter if present)
+       - request_attributes (text[] — attributes requested)
+       - operations_count (integer — for BULK, count of ops)
+       - duration_ms (integer)
+       - ip_address (text — from X-Forwarded-For or
+           RemoteAddr; anonymise last octet for privacy)
+       - user_agent (text)
+       - occurred_at (timestamptz)
+
+     Produce:
+
+       func RecordSCIMAudit(
+           ctx   context.Context,
+           tx    *sqlx.Tx,
+           entry SCIMAuditEntry,
+       ) error
+       // Append-only insert. Called inside the same
+       // transaction as the SCIM operation. If this
+       // fails, log and continue — do not abort the
+       // SCIM operation (best-effort audit).
+
+     Produce a query function for operator dashboards:
+
+       func GetSCIMAuditLog(
+           ctx      context.Context,
+           db       *sqlx.DB,
+           tenantID string,
+           filters  SCIMAuditFilters,
+           page, size int,
+       ) ([]SCIMAuditEntry, int, error)
+
+     SCIMAuditFilters struct:
+       TokenID      string    (nullable)
+       Operation    string    (nullable)
+       ResourceType string    (nullable)
+       ResourceID   string    (nullable)
+       From, To     time.Time (required; max range 30 days)
+
+  9. SCIM rate limiting
+     SCIM endpoints are called by IdP provisioning agents
+     which can burst aggressively. Apply per-token rate
+     limiting using the existing tenant_rate_limit_counters
+     pattern from the multi-tenancy capability. Extend the
+     pattern to support SCIM token-level limits:
+
+     Add a scim_token_rate_limit_counters table:
+       - token_id (FK to scim_tokens)
+       - window_start (timestamptz — truncated to minute)
+       - request_count (integer)
+       PRIMARY KEY (token_id, window_start)
+
+     Default limits (configurable per token via
+     scim_tokens.metadata JSONB):
+       - max_requests_per_minute : 300
+       - max_bulk_operations_per_minute : 5000
+         (bulk counts each operation, not each request)
+
+     Produce:
+
+       func EnforceSCIMRateLimit(
+           ctx      context.Context,
+           db       *sqlx.DB,
+           tokenID  string,
+           cost     int, // 1 for regular, N for bulk
+       ) error
+       // Returns ErrSCIMRateLimitExceeded (HTTP 429)
+       // with Retry-After header value set to seconds
+       // until the next window.
+       // Uses INSERT ... ON CONFLICT DO UPDATE to
+       // increment atomically — same pattern as tenant
+       // rate limit counters.
+
+     SCIMRateLimitMiddleware:
+
+       func SCIMRateLimitMiddleware(
+           db   *sqlx.DB,
+           next http.Handler,
+       ) http.Handler
+       // Extracts token_id from ctx (injected by
+       // SCIMMiddleware). Calls EnforceSCIMRateLimit
+       // with cost=1. On 429: sets Retry-After header
+       // and responds with SCIM error schema.
+
+  10. SCIM router and handler registration
+      Produce a complete SCIMRouter that wires all endpoints
+      with correct middleware ordering:
+
+        func NewSCIMRouter(
+            db     *sqlx.DB,
+            logger *slog.Logger,
+        ) http.Handler
+
+      Middleware chain (outermost to innermost):
+        1. Request ID injection (generate UUID, set in ctx
+           and X-Request-ID response header)
+        2. Structured request logging (method, path,
+           status, duration, tenant_id, token_id,
+           request_id)
+        3. Panic recovery (return 500 SCIM error — never
+           expose stack trace in response)
+        4. SCIMMiddleware (authentication)
+        5. SCIMRateLimitMiddleware (rate limiting)
+        6. SCIMScopeMiddleware (per-route scope check)
+
+      Route table (method, path, scope, handler):
+        GET    /scim/v2/Schemas                    (none)
+        GET    /scim/v2/Schemas/:id                (none)
+        GET    /scim/v2/ResourceTypes              (none)
+        GET    /scim/v2/ResourceTypes/:name        (none)
+        GET    /scim/v2/ServiceProviderConfig      (none)
+        GET    /scim/v2/Users                      users:read
+        GET    /scim/v2/Users/:id                  users:read
+        POST   /scim/v2/Users                      users:write
+        PUT    /scim/v2/Users/:id                  users:write
+        PATCH  /scim/v2/Users/:id                  users:write
+        DELETE /scim/v2/Users/:id                  users:write
+        GET    /scim/v2/Groups                     groups:read
+        GET    /scim/v2/Groups/:id                 groups:read
+        POST   /scim/v2/Groups                     groups:write
+        PUT    /scim/v2/Groups/:id                 groups:write
+        PATCH  /scim/v2/Groups/:id                 groups:write
+        DELETE /scim/v2/Groups/:id                 groups:write
+        POST   /scim/v2/Bulk                       users:write
+                                                   groups:write
+
+      Use only net/http and a lightweight router compatible
+      with the existing codebase (e.g. chi or gorilla/mux
+      — check what the project already uses and match it).
+      Do not introduce a new HTTP framework.
+
+STEP 2 — FULL PRODUCTION IMPLEMENTATION
+─────────────────────────────────────────
+After the gap analysis, produce the complete production
+implementation for every sub-capability listed above.
+
+Output in this exact order:
+
+  1. Schema migrations
+     Sequential .up.sql and .down.sql files following project
+     conventions. Include:
+       - scim_tokens table with all columns
+       - scim_token_rate_limit_counters table
+       - scim_audit_log table
+       - external_id column added to teams table (nullable,
+         unique per tenant — partial unique index)
+       - All indexes for SCIM query patterns, with tenant_id
+         and token_id as leading columns where applicable
+       - Partial indexes on scim_tokens WHERE status='ACTIVE'
+         and on scim_token_rate_limit_counters for window
+         cleanup
+       - Inline comments on all non-obvious constraints
+     No data loss on down migration.
+
+  2. Go type definitions
+     All new structs, typed enums, and sentinel errors.
+     Required at minimum:
+       SCIMToken
+       SCIMTokenStatus       (ACTIVE | REVOKED)
+       SCIMTokenClaims
+       SCIMResourceType      (USER | GROUP)
+       SCIMUser              (SCIM wire format struct with
+                              json tags matching SCIM spec)
+       SCIMGroup             (SCIM wire format struct)
+       SCIMListResponse[T]   (generic — Go 1.21+)
+       SCIMError             (SCIM error wire format)
+       SCIMPatchRequest
+       SCIMPatchOperation
+       SCIMBulkRequest
+       SCIMBulkResponse
+       SCIMBulkOperation
+       SCIMBulkOperationResponse
+       SCIMSchemaDocument
+       SCIMResourceTypeDocument
+       SCIMServiceProviderConfig
+       SCIMAuditEntry
+       SCIMAuditFilters
+       SCIMFilter            (interface)
+       SCIMFilterNode        (AST node)
+       ErrSCIMTokenInvalid   (sentinel)
+       ErrInvalidSCIMFilter  (sentinel)
+       ErrInvalidETag        (sentinel)
+       ErrETagMismatch       (sentinel)
+       ErrSCIMRateLimitExceeded (sentinel — includes
+                               Retry-After seconds in
+                               message)
+     Use json tags that match the SCIM spec attribute
+     names exactly (camelCase, e.g. "userName" not
+     "username", "displayName" not "display_name").
+     No duplication of existing types.
+
+  3. Core logic functions
+     Full implementations of all functions defined in
+     sub-capabilities 1 through 10. No stubs. Every function:
+       - Accepts ctx context.Context as first argument
+       - Extracts tenant_id via TenantFromContext for all
+         tenant-scoped operations
+       - Wraps errors with fmt.Errorf("functionName: %w", err)
+       - Emits structured log lines with tenant_id, token_id,
+         resource_id, request_id where available
+       - Is safe to call concurrently
+     CreateSCIMToken generates the raw token using
+     crypto/rand — no third-party token library.
+     ValidateSCIMToken uses crypto/sha256 — no third-party
+     hashing library.
+     ParseSCIMFilter builds a proper AST — no string
+     splitting or regex-based filter parsing.
+     SCIMListResponse must be generic (Go 1.21 generics)
+     — do not duplicate the struct for User and Group.
+
+  4. HTTP handlers
+     Full implementations of all handlers in sub-capabilities
+     2, 3, 5, and 6. Every handler:
+       - Sets Content-Type: application/scim+json on every
+         response (including errors)
+       - Returns the correct HTTP status code per the SCIM
+         spec constraints section above
+       - Calls RecordSCIMAudit inside the operation
+         transaction (best-effort — does not abort on audit
+         failure)
+       - Calls AssertPermission where applicable (via the
+         token's effective permissions, not a user session)
+       - Never exposes internal error details in the response
+         — map internal errors to SCIM error schema with
+         appropriate scimType
+
+  5. Integration into the existing router
+     Show exactly where NewSCIMRouter is mounted in the
+     existing main.go or router file. Produce a diff-style
+     annotation showing the insertion point with 5 lines of
+     surrounding context. The SCIM router is mounted at /scim/v2
+     and is independent of the existing API router — it has its
+     own middleware chain.
+
+  6. Table-driven tests
+     For each sub-capability: happy path, edge case, failure
+     mode. Naming: Test[SubCapabilityName]_[Scenario].
+     Use sqlmock for DB. Use testify/assert.
+     Use net/http/httptest for HTTP handler tests.
+     Required test cases include:
+       - CreateSCIMToken: raw token returned once; subsequent
+         ValidateSCIMToken with same raw token succeeds;
+         raw token not present anywhere in DB
+       - ValidateSCIMToken: expired token returns
+         ErrSCIMTokenInvalid (same error as not-found —
+         no oracle distinguishability)
+       - ValidateSCIMToken: token belonging to Tenant A
+         cannot be used to access Tenant B (tenant isolation)
+       - GetUser: returns 304 when If-None-Match matches
+         current ETag
+       - PatchUser active=false: calls SuspendUser, not
+         DeactivateUser
+       - PatchUser active=true: calls ReactivateUser;
+         returns 422 if user is DEACTIVATED (cannot
+         reactivate via SCIM)
+       - ReplaceUser: returns 412 when If-Match version
+         does not match current version
+       - ReplaceGroup PUT: reconciliation adds 2 users and
+         removes 1 user in a single transaction; exactly
+         3 DB write calls (not N+1)
+       - ListUsers filter eq: filter userName eq "jsmith"
+         produces correct parameterised SQL, returns only
+         matching user
+       - ListUsers filter co: filter displayName co "smith"
+         produces correct ILIKE query
+       - ListUsers filter and: compound filter produces
+         correctly structured WHERE clause
+       - ParseSCIMFilter with 51-node AST: returns 400
+         scimType=tooMany
+       - ParseSCIMFilter with unknown attribute: returns 400
+         scimType=invalidFilter
+       - BulkOperation with failOnErrors=1: first error
+         aborts processing; completed operations returned
+       - BulkOperation bulkId reference: operation B
+         references bulkId from operation A; resolved
+         correctly
+       - BulkOperation exceeding 1000 operations: returns
+         400 scimType=tooMany before processing any op
+       - EnforceSCIMRateLimit at limit: returns
+         ErrSCIMRateLimitExceeded with correct Retry-After
+       - EnforceSCIMRateLimit concurrent: two goroutines
+         increment simultaneously; total count is correct
+         (no lost updates)
+       - RecordSCIMAudit failure: SCIM operation succeeds
+         even when audit insert fails (best-effort)
+       - SCIMMiddleware with missing Authorization header:
+         returns 401 SCIM error, not a generic HTTP error
+       - SCIMScopeMiddleware with insufficient scope: returns
+         403 SCIM error with correct schema
+       - GetSchemas: returns all three schema documents with
+         correct attribute mutability values
+       - GetServiceProviderConfig: bulk.maxOperations = 1000,
+         etag.supported = true
+
+═══════════════════════════════════════════════════════════════
+CONSTRAINTS — NEVER VIOLATE THESE
+═══════════════════════════════════════════════════════════════
+SCIM Compliance
+  - Content-Type application/scim+json on every response
+    including errors — never application/json
+  - All SCIM error responses use the SCIM error schema —
+    never a custom error format
+  - HTTP status codes must match the SCIM spec exactly —
+    see the SCIM specification constraints section above
+  - ETag values use the weak ETag format W/"<version>"
+  - Filter parsing builds a proper AST — no string
+    splitting, regex matching, or SQL injection vectors
+  - Schema discovery endpoints return complete, accurate
+    documents — no stubs or placeholder attributes
+  - Bulk operations process sequentially — no parallel
+    goroutines per bulk request
+  - PATCH active=false maps to SuspendUser; it never maps
+    to DeactivateUser — DeactivateUser is irreversible and
+    is not triggered by an IdP SCIM operation
+
+Security
+  - Raw SCIM tokens are never stored — only SHA-256 hash
+  - Raw token is returned exactly once from CreateSCIMToken
+    — no retrieval endpoint exists
+  - ValidateSCIMToken returns ErrSCIMTokenInvalid for all
+    failure modes — never distinguish between not-found,
+    revoked, and expired (prevents oracle attacks)
+  - IP address in audit log anonymises the last octet
+  - Internal error details are never exposed in SCIM
+    error responses — map to appropriate scimType only
+  - Stack traces never appear in any HTTP response
+
+Architecture
+  - No breaking changes to users, teams, roles, or any
+    other existing table beyond adding external_id to teams
+  - SCIM router is mounted independently of the existing
+    API router — separate middleware chain
+  - CreateSCIMToken uses crypto/rand — no third-party library
+  - ValidateSCIMToken uses crypto/sha256 — no third-party
+    library
+  - SCIMListResponse uses Go generics (1.21+) — not
+    duplicated per resource type
+  - The existing router framework (chi or gorilla/mux) is
+    used — no new HTTP framework introduced
+  - All DB writes inside SCIM handlers use the outbox
+    pattern via PublishEvent — no direct event dispatch
+  - RecordSCIMAudit failures never abort SCIM operations —
+    best-effort only
+  - Do not analyse or implement any other capability
+    dimension
+═══════════════════════════════════════════════════════════════

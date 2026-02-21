@@ -40,10 +40,30 @@ const (
 	EventTaskQueued              EventType = "TASK_QUEUED"
 	EventTaskDelegated           EventType = "TASK_DELEGATED"
 	EventTaskReassigned          EventType = "TASK_REASSIGNED"
+	EventTaskUnassigned          EventType = "TASK_UNASSIGNED"
+	EventTaskAssignedToTeam      EventType = "TASK_ASSIGNED_TO_TEAM"
+	EventTaskClaimed             EventType = "TASK_CLAIMED"
 	EventTaskSLAWarning          EventType = "TASK_SLA_WARNING"
 	EventTaskSLABreached         EventType = "TASK_SLA_BREACHED"
 	EventWorkbasketTaskClaimed   EventType = "WORKBASKET_TASK_CLAIMED"
 	EventWorkerCapacityExceeded  EventType = "WORKER_CAPACITY_EXCEEDED"
+
+	// User and team management events
+	EventUserCreated        EventType = "USER_CREATED"
+	EventUserSuspended      EventType = "USER_SUSPENDED"
+	EventUserDeactivated    EventType = "USER_DEACTIVATED"
+	EventUserReactivated    EventType = "USER_REACTIVATED"
+	EventUserProfileUpdated EventType = "USER_PROFILE_UPDATED"
+	EventUserRoleAssigned   EventType = "USER_ROLE_ASSIGNED"
+	EventUserRoleRevoked    EventType = "USER_ROLE_REVOKED"
+	EventTeamCreated        EventType = "TEAM_CREATED"
+	EventTeamMemberAdded    EventType = "TEAM_MEMBER_ADDED"
+	EventTeamMemberRemoved  EventType = "TEAM_MEMBER_REMOVED"
+	EventTeamDisbanded      EventType = "TEAM_DISBANDED"
+
+	// SCIM token lifecycle events
+	EventSCIMTokenCreated EventType = "SCIM_TOKEN_CREATED"
+	EventSCIMTokenRevoked EventType = "SCIM_TOKEN_REVOKED"
 
 	// SLA Events (cross-entity and explicit lifecycle)
 	EventSLAWarning  EventType = "SLA_WARNING"

@@ -125,28 +125,20 @@ type ApprovalDefinition struct {
 }
 
 type ApprovalChainTierDefinition struct {
-	Tier           int      `json:"tier"`
-	ApproverRole   string   `json:"approver_role"`
-	Approvers      []string `json:"approvers,omitempty"`
+	Tier           int            `json:"tier"`
+	ApproverRole   string         `json:"approver_role"`
+	Approvers      []string       `json:"approvers,omitempty"`
 	ApprovalPolicy ApprovalPolicy `json:"approval_policy,omitempty"`
-	AuthorityLimit *float64 `json:"authority_limit,omitempty"`
-	CanSkipIf      string   `json:"can_skip_if,omitempty"`
-	RequiredIf     string   `json:"required_if,omitempty"`
+	AuthorityLimit *float64       `json:"authority_limit,omitempty"`
+	CanSkipIf      string         `json:"can_skip_if,omitempty"`
+	RequiredIf     string         `json:"required_if,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
 // DB row models
 // ---------------------------------------------------------------------------
 
-type User struct {
-	ID        string    `json:"id" db:"id"`
-	FullName  string    `json:"full_name" db:"full_name"`
-	RoleCode  string    `json:"role_code" db:"role_code"`
-	ManagerID *string   `json:"manager_id,omitempty" db:"manager_id"`
-	Status    string    `json:"status" db:"status"`
-	CreatedAt time.Time `json:"created_at" db:"created_at"`
-	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
-}
+// User is defined in user.go
 
 type ApprovalGate struct {
 	ID                     string             `json:"id" db:"id"`
@@ -193,17 +185,17 @@ type ApprovalRequest struct {
 }
 
 type ApprovalChainState struct {
-	ID                       string                  `json:"id" db:"id"`
-	CaseID                   string                  `json:"case_id" db:"case_id"`
-	ApprovalGateID           string                  `json:"approval_gate_id" db:"approval_gate_id"`
-	ApprovalChainDefinition  json.RawMessage         `json:"approval_chain_definition" db:"approval_chain_definition"`
-	CurrentTier              int                     `json:"current_tier" db:"current_tier"`
-	TierStatus               ApprovalChainTierStatus `json:"tier_status" db:"tier_status"`
-	TierStartedAt            *time.Time              `json:"tier_started_at,omitempty" db:"tier_started_at"`
-	TierCompletedAt          *time.Time              `json:"tier_completed_at,omitempty" db:"tier_completed_at"`
-	ChainStatus              ApprovalChainStatus     `json:"chain_status" db:"chain_status"`
-	CreatedAt                time.Time               `json:"created_at" db:"created_at"`
-	UpdatedAt                time.Time               `json:"updated_at" db:"updated_at"`
+	ID                      string                  `json:"id" db:"id"`
+	CaseID                  string                  `json:"case_id" db:"case_id"`
+	ApprovalGateID          string                  `json:"approval_gate_id" db:"approval_gate_id"`
+	ApprovalChainDefinition json.RawMessage         `json:"approval_chain_definition" db:"approval_chain_definition"`
+	CurrentTier             int                     `json:"current_tier" db:"current_tier"`
+	TierStatus              ApprovalChainTierStatus `json:"tier_status" db:"tier_status"`
+	TierStartedAt           *time.Time              `json:"tier_started_at,omitempty" db:"tier_started_at"`
+	TierCompletedAt         *time.Time              `json:"tier_completed_at,omitempty" db:"tier_completed_at"`
+	ChainStatus             ApprovalChainStatus     `json:"chain_status" db:"chain_status"`
+	CreatedAt               time.Time               `json:"created_at" db:"created_at"`
+	UpdatedAt               time.Time               `json:"updated_at" db:"updated_at"`
 }
 
 type UserAuthority struct {

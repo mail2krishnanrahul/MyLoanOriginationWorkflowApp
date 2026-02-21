@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"workflow-engine/internal/identity"
 	"workflow-engine/pkg/model"
 
 	"github.com/jmoiron/sqlx"
@@ -474,6 +475,16 @@ func OnboardTenant(
 		return Tenant{}, fmt.Errorf("OnboardTenant: insert tenant: %w", err)
 	}
 
+	// Notice: SeedSystemRoles is now handled by the IdentityService independently
+	// or decoupled via Events.
+	// To prevent direct cyclic dependencies with an `identity` package, we'll
+	// publish a TENANT_ONBOARDED event that `identity` listens to, or just
+	// instantiate an ephemeral identity service here.
+	identitySvc := identity.NewIdentityService(db, slog.Default(), nil) // Needs a publisher, but SeedSystemRoles doesn't use it
+	if err := identitySvc.SeedSystemRoles(ctx, tx, tenant.TenantID); err != nil {
+		return Tenant{}, fmt.Errorf("OnboardTenant: seed system roles: %w", err)
+	}
+
 	if err := publishTenantLifecycleEventTx(ctx, tx, tenant.TenantID, model.EventTenantOnboarded, map[string]interface{}{
 		"tenant_id":   tenant.TenantID,
 		"tenant_code": tenant.TenantCode,
@@ -706,28 +717,16 @@ func publishTenantLifecycleEventTx(
 	if err != nil {
 		return fmt.Errorf("publishTenantLifecycleEventTx: marshal payload: %w", err)
 	}
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO events_outbox (
-			tenant_id,
-			event_type,
-			payload,
-			status,
-			target_service,
-			max_attempts,
-			partition_key
-		)
-		VALUES (
-			$1::uuid,
-			$2,
-			$3::jsonb,
-			'PENDING',
-			'case-orchestrator',
-			5,
-			$4
-		)
-	`, tenantID, string(eventType), raw, tenantID)
-	if err != nil {
-		return fmt.Errorf("publishTenantLifecycleEventTx: insert outbox event: %w", err)
+	if err := PublishEvent(ctx, tx, model.Event{
+		TenantID:      tenantID,
+		EventType:     eventType,
+		Payload:       raw,
+		Status:        model.EventStatusPending,
+		TargetService: "case-orchestrator",
+		MaxAttempts:   5,
+		PartitionKey:  &tenantID,
+	}); err != nil {
+		return fmt.Errorf("publishTenantLifecycleEventTx: publish event: %w", err)
 	}
 	return nil
 }

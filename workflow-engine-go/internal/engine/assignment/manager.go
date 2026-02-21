@@ -82,182 +82,167 @@ func (m *Manager) AutoAssign(ctx context.Context, tx repository.DBExecutor, task
 	}
 
 	// 3. Assign
-	return m.AssignTask(ctx, tx, task.ID, workerID, "auto_distributor")
+	// The auto_distributor logic historically mapped users to workers.
+	// We'll pass tenantID from context (ideally) or pull from Task if we need it.
+	// For now we map workerID -> userID.
+	return m.AssignTaskToUser(ctx, tx, task.ID, workerID, task.TenantID, "auto_distributor")
 }
 
-// AssignTask assigns a task to a specific worker
-func (m *Manager) AssignTask(ctx context.Context, tx repository.DBExecutor, taskID string, workerID string, assignedBy string) error {
-	// Update Task
-	_, err := tx.Exec(ctx, `
+// AssignTaskToUser assigns a task to a specific user (identity)
+func (m *Manager) AssignTaskToUser(ctx context.Context, tx repository.DBExecutor, taskID string, userID string, tenantID string, assignedBy string) error {
+	// Status Transition: Must be PENDING, ASSIGNED, or IN_PROGRESS to move
+	tag, err := tx.Exec(ctx, `
 		UPDATE tasks
-		SET assignee_id = $1,
-		    status = 'ASSIGNED',
+		SET assigned_user_id = $1::uuid,
+		    status = 'IN_PROGRESS',
 		    assigned_at = now(),
 		    updated_at = now()
-		WHERE id = $2::uuid`, workerID, taskID)
+		WHERE id = $2::uuid AND tenant_id = $3::uuid
+		  AND status IN ('PENDING', 'ASSIGNED', 'IN_PROGRESS')`, userID, taskID, tenantID)
 	if err != nil {
-		return fmt.Errorf("failed to assign task: %w", err)
+		return fmt.Errorf("AssignTaskToUser: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return model.ErrTaskNotAssignable
 	}
 
 	// Publish Event
 	return m.Repo.InsertOutboxEvent(ctx, tx, "TASK_ASSIGNED", map[string]interface{}{
 		"task_id":     taskID,
-		"worker_id":   workerID,
+		"user_id":     userID,
 		"assigned_by": assignedBy,
 	})
 }
 
-// ClaimTask allows a worker to pick a task from a basket
-func (m *Manager) ClaimTask(ctx context.Context, tx repository.DBExecutor, taskID string, workerID string) error {
-	// Validation: Is task in a basket? Is it already assigned?
-	// Doing strict SQL check update
+// AssignTaskToTeam allocates a task to a team pool
+func (m *Manager) AssignTaskToTeam(ctx context.Context, tx repository.DBExecutor, taskID string, teamID string, tenantID string, assignedBy string) error {
+	tag, err := tx.Exec(ctx, `
+		UPDATE tasks
+		SET assigned_team_id = $1::uuid,
+		    status = 'PENDING',
+		    updated_at = now()
+		WHERE id = $2::uuid AND tenant_id = $3::uuid
+		  AND status = 'PENDING'`, teamID, taskID, tenantID)
+	if err != nil {
+		return fmt.Errorf("AssignTaskToTeam: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return model.ErrTaskNotAssignable
+	}
 
+	// Publish Event
+	return m.Repo.InsertOutboxEvent(ctx, tx, "TASK_ASSIGNED_TO_TEAM", map[string]interface{}{
+		"task_id":     taskID,
+		"team_id":     teamID,
+		"assigned_by": assignedBy,
+	})
+}
+
+// ClaimTask allows a user to pick a task from a team pool they belong to.
+// Uses optimistic locking to handle concurrent claiming.
+func (m *Manager) ClaimTask(ctx context.Context, tx repository.DBExecutor, taskID string, userID string, tenantID string) error {
+	// 1. Read task to verify assignment pool and retrieve optimistic version
+	var task struct {
+		AssignedTeamID *string `db:"assigned_team_id"`
+		Version        int     `db:"version"`
+	}
+	err := tx.QueryRow(ctx, `
+		SELECT assigned_team_id::text, version 
+		FROM tasks 
+		WHERE id = $1::uuid AND tenant_id = $2::uuid
+	`, taskID, tenantID).Scan(&task.AssignedTeamID, &task.Version)
+	if err != nil {
+		return fmt.Errorf("ClaimTask: load task: %w", err)
+	}
+
+	// 2. Verify User is a member of the required team if one is set
+	if task.AssignedTeamID != nil {
+		var isMember bool
+		err = tx.QueryRow(ctx, `
+			SELECT EXISTS(
+				SELECT 1 FROM team_members 
+				WHERE team_id = $1::uuid AND user_id = $2::uuid AND tenant_id = $3::uuid
+			)
+		`, *task.AssignedTeamID, userID, tenantID).Scan(&isMember)
+		if err != nil {
+			return fmt.Errorf("ClaimTask: team check: %w", err)
+		}
+		if !isMember {
+			return model.ErrUserNotTeamMember
+		}
+	}
+
+	// 3. Optimistic Update
 	res, err := tx.Exec(ctx, `
 		UPDATE tasks
-		SET assignee_id = $1,
-		    status = 'ASSIGNED',
+		SET assigned_user_id = $1::uuid,
+		    status = 'IN_PROGRESS',
 		    assigned_at = now(),
-		    updated_at = now()
-		WHERE id = $2::uuid
-		  AND assignee_id IS NULL -- Must be unassigned
-		  AND workbasket_id IS NOT NULL`, workerID, taskID) // Must be in basket
-	if err != nil {
-		return fmt.Errorf("failed to claim task: %w", err)
-	}
-	if res.RowsAffected() == 0 {
-		return fmt.Errorf("task not available for claim")
-	}
-
-	return m.Repo.InsertOutboxEvent(ctx, tx, "WORKBASKET_TASK_CLAIMED", map[string]interface{}{
-		"task_id":   taskID,
-		"worker_id": workerID,
-	})
-}
-
-// DelegateTask hands off a task from one worker to another.
-// It atomically verifies that fromID is the current assignee to prevent
-// broken delegation chains when concurrent delegations race.
-func (m *Manager) DelegateTask(ctx context.Context, tx repository.DBExecutor, taskID string, fromID string, toID string, reason string, delegationType model.DelegationType) error {
-	// 1. Atomically update task only if fromID is the current assignee
-	tag, err := tx.Exec(ctx, `
-		UPDATE tasks
-		SET assignee_id = $1,
 		    updated_at = now(),
 		    version = version + 1
-		WHERE id = $2::uuid
-		  AND assignee_id = $3`, toID, taskID, fromID)
+		WHERE id = $2::uuid AND tenant_id = $3::uuid
+		  AND assigned_user_id IS NULL 
+		  AND version = $4`, userID, taskID, tenantID, task.Version)
 	if err != nil {
-		return fmt.Errorf("DelegateTask: %w", err)
+		return fmt.Errorf("ClaimTask: update task: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("DelegateTask: %w: task %s not assigned to %s", model.ErrDelegationChainBroken, taskID, fromID)
+	rowsAffected := res.RowsAffected()
+	if rowsAffected == 0 {
+		return model.ErrTaskAlreadyClaimed
 	}
 
-	// 2. Record delegation audit (append-only chain)
-	_, err = tx.Exec(ctx, `
-		INSERT INTO task_delegations (task_id, from_assignee, to_assignee, reason, delegation_type, delegated_by)
-		VALUES ($1::uuid, $2, $3, $4, $5, $2)`,
-		taskID, fromID, toID, reason, string(delegationType))
-	if err != nil {
-		return fmt.Errorf("DelegateTask: insert delegation audit: %w", err)
-	}
-
-	// 3. Publish event
-	return m.Repo.InsertOutboxEvent(ctx, tx, string(model.EventTaskDelegated), map[string]interface{}{
+	return m.Repo.InsertOutboxEvent(ctx, tx, "TASK_CLAIMED", map[string]interface{}{
 		"task_id": taskID,
-		"from":    fromID,
-		"to":      toID,
-		"reason":  reason,
-		"type":    string(delegationType),
+		"user_id": userID,
 	})
 }
 
-// ---------------------------------------------------------------------------
-// [B-07 FIX] ReassignTask — supervisor-only reassignment, distinct from delegation
-// ---------------------------------------------------------------------------
+// UnassignTask clears the AssignedUserID while leaving AssignedTeamID intact
+// Returns the task to the original team pool to be claimed by others.
+func (m *Manager) UnassignTask(ctx context.Context, tx repository.DBExecutor, taskID string, tenantID string, unassignedBy string, reason string) error {
+	tag, err := tx.Exec(ctx, `
+		UPDATE tasks
+		SET assigned_user_id = NULL,
+		    status = CASE WHEN status = 'IN_PROGRESS' THEN 'PENDING' ELSE status END,
+		    updated_at = now(),
+		    version = version + 1
+		WHERE id = $1::uuid AND tenant_id = $2::uuid
+		  AND assigned_user_id IS NOT NULL`, taskID, tenantID)
+	if err != nil {
+		return fmt.Errorf("UnassignTask: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return model.ErrTaskNotAssignable
+	}
 
-// ReassignTask is a supervisor-initiated reassignment of a task to a different
-// worker. Unlike DelegateTask (which is worker-to-worker), reassignment
-// requires the SUPERVISOR role, publishes a distinct TASK_REASSIGNED event,
-// and is recorded separately in the delegation audit trail.
-func (m *Manager) ReassignTask(ctx context.Context, tx repository.DBExecutor, taskID string, newWorkerID string, supervisorID string, reason string) error {
-	// 1. Enforce SUPERVISOR role via assignment guard
-	if err := ValidateAssignmentTransition(ctx, StateAssigned, StateReassigned, supervisorID, "SUPERVISOR"); err != nil {
+	return m.Repo.InsertOutboxEvent(ctx, tx, "TASK_UNASSIGNED", map[string]interface{}{
+		"task_id":       taskID,
+		"unassigned_by": unassignedBy,
+		"reason":        reason,
+	})
+}
+
+// ReassignTask combines Unassign and Assign into a single atomic action for supervisors.
+func (m *Manager) ReassignTask(ctx context.Context, tx repository.DBExecutor, taskID string, toUserID string, tenantID string, reassignedBy string, reason string) error {
+	tag, err := tx.Exec(ctx, `
+		UPDATE tasks
+		SET assigned_user_id = $1::uuid,
+		    status = 'IN_PROGRESS',
+		    assigned_at = now(),
+		    updated_at = now(),
+		    version = version + 1
+		WHERE id = $2::uuid AND tenant_id = $3::uuid`, toUserID, taskID, tenantID)
+	if err != nil {
 		return fmt.Errorf("ReassignTask: %w", err)
 	}
-
-	// 2. Lock and read current assignee
-	var currentAssignee *string
-	err := tx.QueryRow(ctx, `
-		SELECT assignee_id
-		FROM tasks
-		WHERE id = $1::uuid
-		FOR UPDATE`, taskID,
-	).Scan(&currentAssignee)
-	if err != nil {
-		return fmt.Errorf("ReassignTask: read task %s: %w", taskID, err)
-	}
-
-	// 3. Prevent self-reassignment to same worker
-	if currentAssignee != nil && *currentAssignee == newWorkerID {
-		return fmt.Errorf("ReassignTask: task %s is already assigned to %s", taskID, newWorkerID)
-	}
-
-	// 4. Validate target worker is active and under capacity
-	var workerStatus string
-	var maxConcurrent, currentLoad int
-	err = tx.QueryRow(ctx, `
-		SELECT w.status, w.max_concurrent_tasks,
-		       (SELECT COUNT(*) FROM tasks t WHERE t.assignee_id = w.id AND t.status = 'IN_PROGRESS')
-		FROM workers w
-		WHERE w.id = $1`, newWorkerID,
-	).Scan(&workerStatus, &maxConcurrent, &currentLoad)
-	if err != nil {
-		return fmt.Errorf("ReassignTask: validate worker %s: %w", newWorkerID, err)
-	}
-	if workerStatus != "ACTIVE" {
-		return fmt.Errorf("ReassignTask: worker %s is %s, not ACTIVE", newWorkerID, workerStatus)
-	}
-	if currentLoad >= maxConcurrent {
-		return fmt.Errorf("ReassignTask: %w: worker %s has %d/%d tasks",
-			model.ErrWorkerAtCapacity, newWorkerID, currentLoad, maxConcurrent)
-	}
-
-	// 5. Reassign the task
-	tag, err := tx.Exec(ctx, `
-		UPDATE tasks
-		SET assignee_id = $1,
-		    status = 'ASSIGNED',
-		    assigned_at = now(),
-		    updated_at = now(),
-		    version = version + 1
-		WHERE id = $2::uuid`, newWorkerID, taskID)
-	if err != nil {
-		return fmt.Errorf("ReassignTask: update task: %w", err)
-	}
 	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("ReassignTask: %w: %s", model.ErrTaskNotFound, taskID)
+		return model.ErrTaskNotFound
 	}
 
-	// 6. Record in delegation audit trail (as MANUAL type by supervisor)
-	var fromStr string
-	if currentAssignee != nil {
-		fromStr = *currentAssignee
-	}
-	_, err = tx.Exec(ctx, `
-		INSERT INTO task_delegations (task_id, from_assignee, to_assignee, reason, delegation_type, delegated_by)
-		VALUES ($1::uuid, $2, $3, $4, 'MANUAL', $5)`,
-		taskID, fromStr, newWorkerID, reason, supervisorID)
-	if err != nil {
-		return fmt.Errorf("ReassignTask: insert audit: %w", err)
-	}
-
-	// 7. Publish TASK_REASSIGNED event (distinct from TASK_DELEGATED)
-	return m.Repo.InsertOutboxEvent(ctx, tx, string(model.EventTaskReassigned), map[string]interface{}{
+	return m.Repo.InsertOutboxEvent(ctx, tx, "TASK_REASSIGNED", map[string]interface{}{
 		"task_id":       taskID,
-		"from_worker":   fromStr,
-		"to_worker":     newWorkerID,
-		"supervisor_id": supervisorID,
+		"to_user_id":    toUserID,
+		"reassigned_by": reassignedBy,
 		"reason":        reason,
 	})
 }

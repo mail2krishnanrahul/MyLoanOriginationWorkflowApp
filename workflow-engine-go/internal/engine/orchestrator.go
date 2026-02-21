@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"workflow-engine/internal/document"
@@ -14,6 +15,8 @@ import (
 	"workflow-engine/internal/repository"
 	"workflow-engine/internal/sla"
 	"workflow-engine/pkg/model"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // ---------------------------------------------------------------------------
@@ -85,6 +88,8 @@ func (o *CaseOrchestratorService) HandleEvent(ctx context.Context, event model.E
 		model.EventCaseRejected,
 		model.EventCaseMaxReworkExceeded:
 		return o.onApprovalCaseEvent(ctx, event)
+	case model.EventUserDeactivated:
+		return o.onUserDeactivated(ctx, event)
 	case model.EventTenantConfigUpdated:
 		return o.onTenantConfigUpdated(ctx, event)
 	default:
@@ -579,6 +584,110 @@ func (o *CaseOrchestratorService) onTenantConfigUpdated(ctx context.Context, eve
 	return nil
 }
 
+func (o *CaseOrchestratorService) onUserDeactivated(ctx context.Context, event model.Event) error {
+	payload := map[string]interface{}{}
+	if len(event.Payload) > 0 {
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			return fmt.Errorf("onUserDeactivated: parse payload: %w", err)
+		}
+	}
+	userID := strFromMap(payload, "user_id")
+	if strings.TrimSpace(userID) == "" {
+		return fmt.Errorf("onUserDeactivated: user_id missing in payload")
+	}
+
+	tenantID, _ := multitenancy.TenantFromContext(ctx)
+	if strings.TrimSpace(tenantID) == "" {
+		tenantID = strings.TrimSpace(strFromMap(payload, "tenant_id"))
+	}
+	if strings.TrimSpace(tenantID) == "" {
+		tenantID = multitenancy.DefaultTenantID
+	}
+
+	tx, err := o.Repo.Pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("onUserDeactivated: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	type taskRef struct {
+		TaskID string
+		CaseID string
+	}
+	tasks := make([]taskRef, 0)
+	rows, err := tx.Query(ctx, `
+		SELECT id::text AS task_id, case_id::text AS case_id
+		FROM tasks
+		WHERE tenant_id = $1::uuid
+		  AND assigned_user_id = $2::uuid
+		  AND status IN ('PENDING', 'IN_PROGRESS')
+		FOR UPDATE
+	`, tenantID, userID)
+	if err != nil {
+		return fmt.Errorf("onUserDeactivated: select assigned tasks: %w", err)
+	}
+	for rows.Next() {
+		var ref taskRef
+		if err := rows.Scan(&ref.TaskID, &ref.CaseID); err != nil {
+			rows.Close()
+			return fmt.Errorf("onUserDeactivated: scan assigned task: %w", err)
+		}
+		tasks = append(tasks, ref)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("onUserDeactivated: iterate assigned tasks: %w", err)
+	}
+	rows.Close()
+
+	if len(tasks) > 0 {
+		_, err := tx.Exec(ctx, `
+			UPDATE tasks
+			SET assigned_user_id = NULL,
+			    status = 'PENDING',
+			    assigned_at = NULL,
+			    updated_at = now(),
+			    version = version + 1
+			WHERE tenant_id = $1::uuid
+			  AND assigned_user_id = $2::uuid
+			  AND status IN ('PENDING', 'IN_PROGRESS')
+		`, tenantID, userID)
+		if err != nil {
+			return fmt.Errorf("onUserDeactivated: unassign tasks: %w", err)
+		}
+
+		for _, t := range tasks {
+			taskID := t.TaskID
+			caseID := t.CaseID
+			eventPayload, _ := json.Marshal(map[string]interface{}{
+				"tenant_id":       tenantID,
+				"task_id":         taskID,
+				"case_id":         caseID,
+				"user_id":         userID,
+				"reason":          "USER_DEACTIVATED_SAFETY_NET",
+				"unassigned_by":   "case-orchestrator",
+				"event_source":    "handle_event.USER_DEACTIVATED",
+				"safety_net_only": true,
+			})
+			if err := o.Repo.PublishEvent(ctx, tx, model.Event{
+				CaseID:    &caseID,
+				TaskID:    &taskID,
+				EventType: model.EventTaskUnassigned,
+				Payload:   eventPayload,
+				Status:    model.EventStatusPending,
+			}); err != nil {
+				return fmt.Errorf("onUserDeactivated: publish TASK_UNASSIGNED for task %s: %w", taskID, err)
+			}
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("onUserDeactivated: commit: %w", err)
+	}
+	slog.Info("USER_DEACTIVATED safety-net processed", "tenant_id", tenantID, "user_id", userID, "tasks_unassigned", len(tasks))
+	return nil
+}
+
 func (o *CaseOrchestratorService) onApprovalCaseEvent(ctx context.Context, event model.Event) error {
 	var payload map[string]interface{}
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {
@@ -656,6 +765,14 @@ func CreateTasksForStage(
 	caseMetadata, err := loadCaseMetadataForApproval(ctx, tx, caseID)
 	if err != nil {
 		return count, fmt.Errorf("failed to load case metadata for approvals: %w", err)
+	}
+	var caseTenantID string
+	if err := tx.QueryRow(ctx, `
+		SELECT tenant_id::text
+		FROM cases
+		WHERE id = $1::uuid
+	`, caseID).Scan(&caseTenantID); err != nil {
+		return count, fmt.Errorf("failed to load case tenant for task creation: %w", err)
 	}
 
 	for _, activity := range stageDef.Activities {
@@ -790,11 +907,89 @@ func CreateTasksForStage(
 				}
 			}
 
+			if defaultTeamCode := extractDefaultTeamCode(taskDef); defaultTeamCode != "" {
+				var defaultTeamID string
+				err := tx.QueryRow(ctx, `
+					SELECT team_id::text
+					FROM teams
+					WHERE tenant_id = $1::uuid
+					  AND team_code = $2
+					  AND status = 'ACTIVE'
+				`, caseTenantID, defaultTeamCode).Scan(&defaultTeamID)
+				if err != nil {
+					if errors.Is(err, pgx.ErrNoRows) {
+						slog.Warn("default team missing or inactive, skipping auto-assignment",
+							"tenant_id", caseTenantID,
+							"case_id", caseID,
+							"task_id", createdTask.ID,
+							"default_team_code", defaultTeamCode,
+						)
+					} else {
+						return count, fmt.Errorf("failed to resolve default team %s for task %s: %w", defaultTeamCode, taskDef.Code, err)
+					}
+				} else {
+					if _, err := tx.Exec(ctx, `
+						UPDATE tasks
+						SET assigned_team_id = $1::uuid,
+						    updated_at = now(),
+						    version = version + 1
+						WHERE id = $2::uuid
+					`, defaultTeamID, createdTask.ID); err != nil {
+						return count, fmt.Errorf("failed to auto-assign task %s to default team %s: %w", taskDef.Code, defaultTeamCode, err)
+					}
+					taskID := createdTask.ID
+					payload, _ := json.Marshal(map[string]interface{}{
+						"case_id":           caseID,
+						"task_id":           taskID,
+						"tenant_id":         caseTenantID,
+						"assigned_team_id":  defaultTeamID,
+						"default_team_code": defaultTeamCode,
+						"source":            "task_definition.default_team_code",
+					})
+					if err := repo.PublishEvent(ctx, tx, model.Event{
+						CaseID:    &caseID,
+						TaskID:    &taskID,
+						EventType: model.EventTaskAssignedToTeam,
+						Payload:   payload,
+						Status:    model.EventStatusPending,
+					}); err != nil {
+						return count, fmt.Errorf("failed to publish TASK_ASSIGNED_TO_TEAM for task %s: %w", taskDef.Code, err)
+					}
+				}
+			}
+
 			count++
 		}
 	}
 
 	return count, nil
+}
+
+func extractDefaultTeamCode(taskDef model.TaskDefinitionV2) string {
+	if len(taskDef.Config) == 0 {
+		return ""
+	}
+	cfg := map[string]interface{}{}
+	if err := json.Unmarshal(taskDef.Config, &cfg); err != nil {
+		return ""
+	}
+	if v, ok := cfg["default_team_code"]; ok {
+		code := strings.ToUpper(strings.TrimSpace(fmt.Sprint(v)))
+		if code != "" {
+			return code
+		}
+	}
+	if assignmentRaw, ok := cfg["assignment"]; ok {
+		if assignment, ok := assignmentRaw.(map[string]interface{}); ok {
+			if v, ok := assignment["default_team_code"]; ok {
+				code := strings.ToUpper(strings.TrimSpace(fmt.Sprint(v)))
+				if code != "" {
+					return code
+				}
+			}
+		}
+	}
+	return ""
 }
 
 func (o *CaseOrchestratorService) applyAggregationRulesForTask(ctx context.Context, caseID string, taskID string) error {

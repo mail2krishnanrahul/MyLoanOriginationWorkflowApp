@@ -6,7 +6,11 @@ import { Card, CardHeader, CardTitle } from '@/components/ui/Card';
 import { usePersonalDashboard } from '@/hooks/use-dashboard';
 import { SkeletonCard } from '@/components/ui/LoadingSkeleton';
 
-export default function PersonalDashboardPage() {
+interface Props {
+    disableHeader?: boolean;
+}
+
+export default function PersonalDashboardPage({ disableHeader }: Props = {}) {
     const { data, isLoading, isError } = usePersonalDashboard();
 
     if (isLoading) {
@@ -32,12 +36,14 @@ export default function PersonalDashboardPage() {
 
     return (
         <div className="space-y-4">
-            <div className="flex items-center justify-between">
-                <div>
-                    <h2 className="text-xl font-bold text-neutral-900 dark:text-neutral-100">Personal Dashboard</h2>
-                    <p className="text-sm text-neutral-500 dark:text-neutral-400">Your upcoming tasks and recent performance metrics</p>
+            {!disableHeader && (
+                <div className="flex items-center justify-between">
+                    <div>
+                        <h2 className="text-xl font-bold text-neutral-900 dark:text-neutral-100">Personal Dashboard</h2>
+                        <p className="text-sm text-neutral-500 dark:text-neutral-400">Your upcoming tasks and recent performance metrics</p>
+                    </div>
                 </div>
-            </div>
+            )}
 
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 <StatCard

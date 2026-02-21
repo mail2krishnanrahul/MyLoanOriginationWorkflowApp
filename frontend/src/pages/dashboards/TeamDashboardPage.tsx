@@ -7,7 +7,11 @@ import { Card, CardHeader, CardTitle, CardDescription } from '@/components/ui/Ca
 import { useTeamDashboard } from '@/hooks/use-dashboard';
 import { SkeletonCard } from '@/components/ui/LoadingSkeleton';
 
-export default function TeamDashboardPage() {
+interface Props {
+    disableHeader?: boolean;
+}
+
+export default function TeamDashboardPage({ disableHeader }: Props = {}) {
     const { data, isLoading, isError } = useTeamDashboard();
 
     if (isLoading) {
@@ -34,12 +38,14 @@ export default function TeamDashboardPage() {
 
     return (
         <div className="space-y-4">
-            <div className="flex items-center justify-between">
-                <div>
-                    <h2 className="text-xl font-bold text-neutral-900 dark:text-neutral-100">Team Dashboard</h2>
-                    <p className="text-sm text-neutral-500 dark:text-neutral-400">Supervisor overview of workload, throughput, and SLAs</p>
+            {!disableHeader && (
+                <div className="flex items-center justify-between">
+                    <div>
+                        <h2 className="text-xl font-bold text-neutral-900 dark:text-neutral-100">Team Dashboard</h2>
+                        <p className="text-sm text-neutral-500 dark:text-neutral-400">Supervisor overview of workload, throughput, and SLAs</p>
+                    </div>
                 </div>
-            </div>
+            )}
 
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 <StatCard
@@ -122,8 +128,8 @@ export default function TeamDashboardPage() {
                                     <td className="px-4 py-3 text-right">{member.avgHandleTimeMinutes}</td>
                                     <td className="px-4 py-3 text-right">
                                         <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ${member.slaCompliancePercent >= 95 ? 'bg-success-100 text-success-700' :
-                                                member.slaCompliancePercent >= 90 ? 'bg-warning-100 text-warning-700' :
-                                                    'bg-danger-100 text-danger-700'
+                                            member.slaCompliancePercent >= 90 ? 'bg-warning-100 text-warning-700' :
+                                                'bg-danger-100 text-danger-700'
                                             }`}>
                                             {member.slaCompliancePercent}%
                                         </span>

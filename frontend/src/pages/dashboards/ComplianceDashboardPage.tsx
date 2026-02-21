@@ -4,7 +4,11 @@ import { Card, CardHeader, CardTitle, CardDescription } from '@/components/ui/Ca
 import { useComplianceDashboard } from '@/hooks/use-dashboard';
 import { SkeletonCard } from '@/components/ui/LoadingSkeleton';
 
-export default function ComplianceDashboardPage() {
+interface Props {
+    disableHeader?: boolean;
+}
+
+export default function ComplianceDashboardPage({ disableHeader }: Props = {}) {
     const { data, isLoading, isError } = useComplianceDashboard();
 
     if (isLoading) {
@@ -30,12 +34,14 @@ export default function ComplianceDashboardPage() {
 
     return (
         <div className="space-y-4">
-            <div className="flex items-center justify-between">
-                <div>
-                    <h2 className="text-xl font-bold text-neutral-900 dark:text-neutral-100">Compliance & Audit</h2>
-                    <p className="text-sm text-neutral-500 dark:text-neutral-400">Monitor regulatory holds, controls, and system integrity</p>
+            {!disableHeader && (
+                <div className="flex items-center justify-between">
+                    <div>
+                        <h2 className="text-xl font-bold text-neutral-900 dark:text-neutral-100">Compliance & Audit</h2>
+                        <p className="text-sm text-neutral-500 dark:text-neutral-400">Monitor regulatory holds, controls, and system integrity</p>
+                    </div>
                 </div>
-            </div>
+            )}
 
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 <StatCard

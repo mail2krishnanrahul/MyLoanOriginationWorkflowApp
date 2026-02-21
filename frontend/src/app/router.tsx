@@ -6,9 +6,8 @@ import { SkeletonCard } from '@/components/ui/LoadingSkeleton';
 const CaseListPage = lazy(() => import('@/pages/cases/CaseListPage'));
 const CaseDetailPage = lazy(() => import('@/pages/cases/CaseDetailPage'));
 const WorkbasketPage = lazy(() => import('@/pages/workbaskets/WorkbasketPage'));
-const PersonalDashboardPage = lazy(() => import('@/pages/dashboards/PersonalDashboardPage'));
-const TeamDashboardPage = lazy(() => import('@/pages/dashboards/TeamDashboardPage'));
-const ComplianceDashboardPage = lazy(() => import('@/pages/dashboards/ComplianceDashboardPage'));
+const DashboardPage = lazy(() => import('@/pages/dashboards/DashboardPage'));
+const AdminHubPage = lazy(() => import('@/pages/admin/AdminHubPage'));
 
 function RouteFallback() {
   return (
@@ -24,14 +23,13 @@ export function AppRouter() {
     <AppShell>
       <Suspense fallback={<RouteFallback />}>
         <Routes>
-          <Route path="/" element={<Navigate to="/dashboards/personal" replace />} />
-          <Route path="/dashboards/personal" element={<PersonalDashboardPage />} />
-          <Route path="/dashboards/team" element={<TeamDashboardPage />} />
-          <Route path="/dashboards/compliance" element={<ComplianceDashboardPage />} />
+          <Route path="/" element={<Navigate to="/dashboard" replace />} />
+          <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/admin" element={<AdminHubPage />} />
           <Route path="/cases" element={<CaseListPage />} />
           <Route path="/cases/:caseId" element={<CaseDetailPage />} />
           <Route path="/workbaskets" element={<WorkbasketPage />} />
-          <Route path="*" element={<Navigate to="/dashboards/personal" replace />} />
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </Suspense>
     </AppShell>

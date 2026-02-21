@@ -19,6 +19,7 @@ import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/Ca
 import { DataTable } from '@/components/ui/DataTable';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { SelectInput, TextInput } from '@/components/ui/FormField';
+import { MultiSelectDropdown } from '@/components/ui/MultiSelectDropdown';
 import { TableSkeleton } from '@/components/ui/LoadingSkeleton';
 import { Pagination } from '@/components/ui/Pagination';
 import { useCases } from '@/hooks/use-cases';
@@ -283,40 +284,20 @@ export default function CaseListPage() {
             ))}
           </div>
 
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-6">
-            <SelectInput
-              value={parseArrayParam(searchParams.get('status')) ?? []}
-              onChange={(event) => {
-                const selected = Array.from(event.target.selectedOptions).map((option) => option.value);
-                updateParam('status', selected.join(','));
-              }}
-              aria-label="Status filter"
-              multiple
-              className="h-[7.25rem]"
-            >
-              {statusOptions.map((status) => (
-                <option key={status} value={status}>
-                  {status.replaceAll('_', ' ')}
-                </option>
-              ))}
-            </SelectInput>
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-6 items-start">
+            <MultiSelectDropdown
+              options={statusOptions.map(status => ({ label: status.replaceAll('_', ' '), value: status }))}
+              selectedValues={parseArrayParam(searchParams.get('status')) ?? []}
+              onChange={(selected) => updateParam('status', selected.join(','))}
+              placeholder="Status"
+            />
 
-            <SelectInput
-              value={parseArrayParam(searchParams.get('stage')) ?? []}
-              onChange={(event) => {
-                const selected = Array.from(event.target.selectedOptions).map((option) => option.value);
-                updateParam('stage', selected.join(','));
-              }}
-              aria-label="Stage filter"
-              multiple
-              className="h-[7.25rem]"
-            >
-              {stageOptions.map((stage) => (
-                <option key={stage} value={stage}>
-                  {stage.replaceAll('_', ' ')}
-                </option>
-              ))}
-            </SelectInput>
+            <MultiSelectDropdown
+              options={stageOptions.map(stage => ({ label: stage.replaceAll('_', ' '), value: stage }))}
+              selectedValues={parseArrayParam(searchParams.get('stage')) ?? []}
+              onChange={(selected) => updateParam('stage', selected.join(','))}
+              placeholder="Stage"
+            />
 
             <TextInput
               value={searchParams.get('caseType') ?? ''}

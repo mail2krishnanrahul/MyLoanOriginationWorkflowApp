@@ -1,4 +1,4 @@
-import { BriefcaseBusiness, ChevronsLeftRight, LayoutDashboard, LineChart, ShieldCheck } from 'lucide-react';
+import { BriefcaseBusiness, ChevronsLeftRight, LayoutDashboard, ShieldCheck } from 'lucide-react';
 import type { ComponentType } from 'react';
 import { NavLink } from 'react-router-dom';
 import { Button } from '@/components/ui/Button';
@@ -13,11 +13,10 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
-  { label: 'Personal Dashboard', path: '/dashboards/personal', icon: LayoutDashboard },
-  { label: 'Team Dashboard', path: '/dashboards/team', icon: LineChart },
-  { label: 'Compliance & Audit', path: '/dashboards/compliance', icon: ShieldCheck },
+  { label: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
   { label: 'My Cases', path: '/cases', icon: BriefcaseBusiness },
-  { label: 'Workbaskets', path: '/workbaskets', icon: BriefcaseBusiness, badge: 'Live' }
+  { label: 'Workbaskets', path: '/workbaskets', icon: BriefcaseBusiness, badge: 'Live' },
+  { label: 'Admin Hub', path: '/admin', icon: ShieldCheck }
 ];
 
 export function Sidebar() {

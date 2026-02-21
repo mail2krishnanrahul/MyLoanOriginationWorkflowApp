@@ -1,0 +1,73 @@
+version: '3.9'
+
+services:
+
+  api:
+    build:
+      context: ./workflow-engine-go
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgres://myappuser:password@host.docker.internal:5432/LoanOriginationDB?sslmode=disable
+      PORT: 8080
+      LOG_LEVEL: debug
+      CORS_ALLOWED_ORIGINS: http://localhost,http://localhost:80
+      JWT_SECRET: super-secret-local-dev-key
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    networks:
+      - workflow_network
+
+  worker:
+    build:
+      context: ./workflow-engine-go
+      dockerfile: Dockerfile.worker
+    depends_on:
+      api:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgres://myappuser:password@host.docker.internal:5432/LoanOriginationDB?sslmode=disable
+      LOG_LEVEL: debug
+    restart: unless-stopped
+    networks:
+      - workflow_network
+
+  dispatcher:
+    build:
+      context: ./workflow-engine-go
+      dockerfile: Dockerfile.dispatcher
+    depends_on:
+      api:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgres://myappuser:password@host.docker.internal:5432/LoanOriginationDB?sslmode=disable
+      LOG_LEVEL: debug
+    restart: unless-stopped
+    networks:
+      - workflow_network
+
+  sweeper:
+    build:
+      context: ./workflow-engine-go
+      dockerfile: Dockerfile.sweeper
+    environment:
+      DATABASE_URL: postgres://myappuser:password@host.docker.internal:5432/LoanOriginationDB?sslmode=disable
+      LOG_LEVEL: info
+    restart: unless-stopped
+    networks:
+      - workflow_network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+    networks:
+      - workflow_network
+
+networks:
+  workflow_network:

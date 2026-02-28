@@ -45,6 +45,9 @@ type CaseDetail struct {
 	StageHistory []StageHistoryEntry `json:"stageHistory"`
 	SubCases     []SubCaseSummary    `json:"subCases"`
 	Activities   []ActivitySummary   `json:"activities"` // current stage only
+
+	// Deal snapshot from case_deal_links (full deal structure for Deal 360 view)
+	DealSnapshot json.RawMessage `json:"dealSnapshot,omitempty"`
 }
 
 // StageHistoryEntry is one row from case_stage_transitions.

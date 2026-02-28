@@ -1,5 +1,5 @@
 import { ApiClient, api } from './client';
-import type { CaseListFilters, CaseListResponse, CaseSummaryStats } from '@/types/cases';
+import type { CaseListFilters, CaseListResponse, CaseListItem, CaseTagSummary, CaseSummaryStats } from '@/types/cases';
 import { deriveTagCategory } from '@/types/cases';
 
 export interface Case {
@@ -37,47 +37,105 @@ export const CasesApi = {
     update: (id: string, data: UpdateCaseRequest) => ApiClient.patch<Case>(`/cases/${id}`, data),
 };
 
+// Shape returned by the Go backend for GET /cases
+interface BackendCaseListItem {
+    id: string;
+    referenceNumber: string;
+    caseType: string;
+    status: string;
+    currentStage: string | null;
+    priority: string | null;
+    borrowerName: string | null;
+    assignedTo: string | null;
+    slaStatus: string;
+    slaRemainingMinutes: number;
+    createdAt: string;
+    updatedAt: string;
+    tags: { tagCode: string; tagValue: string | null }[];
+}
+
+interface BackendCaseListResponse {
+    items: BackendCaseListItem[];
+    total: number;
+    page: number;
+    limit: number;
+}
+
+function mapBackendItemToFrontend(item: BackendCaseListItem): CaseListItem {
+    const tags: CaseTagSummary[] = (item.tags || []).map(t => ({
+        tagCode: t.tagCode,
+        tagValue: t.tagValue,
+        category: deriveTagCategory(t.tagCode),
+    }));
+
+    // Derive complexity from tags (first COMPLEXITY-category tag)
+    const complexityTag = tags.find(t => t.category === 'COMPLEXITY');
+    const complexity = complexityTag ? complexityTag.tagCode as CaseListItem['complexity'] : null;
+
+    // Derive isVip from tags
+    const isVip = tags.some(t => t.category === 'VIP_PRIORITY');
+
+    // Derive hasBlockingErrors from tags
+    const hasBlockingErrors = tags.some(t => t.category === 'DOCUMENT_ERROR');
+
+    // Compute slaDueAt from slaRemainingMinutes
+    const slaDueAt = item.slaRemainingMinutes
+        ? new Date(Date.now() + item.slaRemainingMinutes * 60 * 1000).toISOString()
+        : null;
+
+    return {
+        id: item.id,
+        reference: item.referenceNumber,
+        title: item.borrowerName || item.referenceNumber,
+        description: `${item.caseType} — Stage: ${item.currentStage || 'N/A'}`,
+        priority: (item.priority as CaseListItem['priority']) || 'MEDIUM',
+        status: item.status as CaseListItem['status'],
+        complexity,
+        requiredSkills: [],
+        tags: tags.filter(t => t.category !== 'COMPLEXITY'),
+        assignedUser: null,
+        slaDueAt,
+        createdAt: item.createdAt,
+        updatedAt: item.updatedAt,
+        hasBlockingErrors,
+        isVip,
+        stageCode: item.currentStage || '',
+    };
+}
+
 export async function listCases(
     filters: CaseListFilters,
     page: number,
     pageSize: number,
     signal?: AbortSignal,
 ): Promise<CaseListResponse> {
-    const params = {
-        q: filters.search || undefined,
-        status: filters.statuses.length ? filters.statuses : undefined,
-        priority: filters.priorities.length ? filters.priorities : undefined,
-        complexity: filters.complexities.length ? filters.complexities : undefined,
-        skill_code: filters.skillCodes.length ? filters.skillCodes : undefined,
-        assigned_to_me: filters.assignedToMe ? true : undefined,
-        has_blocking_errors: filters.hasBlockingErrors ? true : undefined,
-        is_vip: filters.isVip ? true : undefined,
-        sla_due_before: filters.slaDueBefore || undefined,
-        created_after: filters.createdAfter || undefined,
-        created_before: filters.createdBefore || undefined,
-        team_id: filters.teamId || undefined,
+    const params: Record<string, unknown> = {
+        scope: filters.assignedToMe ? 'my' : 'all',
+        query: filters.search || undefined,
+        status: filters.statuses.length ? filters.statuses.join(',') : undefined,
+        priority: filters.priorities.length ? filters.priorities.join(',') : undefined,
+        tags: filters.skillCodes.length ? filters.skillCodes.join(',') : undefined,
+        dateFrom: filters.createdAfter || undefined,
+        dateTo: filters.createdBefore || undefined,
         page,
-        page_size: pageSize
+        limit: pageSize,
     };
 
-    const response = await api.get<CaseListResponse>('/cases', {
+    const response = await api.get<BackendCaseListResponse>('/cases', {
         params,
         signal
     });
 
-    // Derive tag categories from tag codes since the backend doesn't store category.
-    if (response.data?.items) {
-        for (const item of response.data.items) {
-            if (item.tags) {
-                item.tags = item.tags.map(tag => ({
-                    ...tag,
-                    category: tag.category || deriveTagCategory(tag.tagCode),
-                }));
-            }
-        }
-    }
+    const backend = response.data;
+    const items = (backend.items || []).map(mapBackendItemToFrontend);
 
-    return response.data;
+    return {
+        items,
+        totalCount: backend.total,
+        page: backend.page,
+        pageSize: backend.limit,
+        hasNextPage: backend.page * backend.limit < backend.total,
+    };
 }
 
 export async function getCaseSummaryStats(

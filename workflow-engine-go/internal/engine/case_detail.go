@@ -127,6 +127,14 @@ func GetCaseDetail(
 		}
 	}
 
+	// 6. Deal snapshot from case_deal_links (for Deal 360 view)
+	dealSnapshot, err := repo.GetDealSnapshot(ctx, header.CaseID)
+	if err != nil {
+		slog.Debug("no deal snapshot for case", "case_id", header.CaseID, "error", err)
+	} else if len(dealSnapshot) > 0 {
+		detail.DealSnapshot = dealSnapshot
+	}
+
 	// Default empty slices for JSON (avoid null)
 	if detail.StageHistory == nil {
 		detail.StageHistory = []StageHistoryEntry{}

@@ -91,6 +91,7 @@ export interface CaseDetail {
   updatedAt: string;
   completedAt?: string;
   metadata?: Record<string, unknown>;
+  dealSnapshot?: DealPayload;
 }
 
 export interface StageHistoryEntry {

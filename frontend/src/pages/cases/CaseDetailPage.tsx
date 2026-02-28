@@ -8,6 +8,7 @@ import { DocumentsTab } from '@/components/cases/tabs/DocumentsTab';
 import { ApprovalsTab } from '@/components/cases/tabs/ApprovalsTab';
 import { TimelineTab } from '@/components/cases/tabs/TimelineTab';
 import { CommunicationsTab } from '@/components/cases/tabs/CommunicationsTab';
+import { Deal360Tab } from '@/components/cases/tabs/Deal360Tab';
 import { PriorityBadge } from '@/components/domain/PriorityBadge';
 import { SLAIndicator } from '@/components/domain/SLAIndicator';
 import { StatusBadge } from '@/components/domain/StatusBadge';
@@ -26,6 +27,7 @@ const tabs: TabItem[] = [
   { key: 'documents', label: 'Documents' },
   { key: 'approvals', label: 'Approvals' },
   { key: 'timeline', label: 'Timeline / History' },
+  { key: 'deal360', label: 'Deal 360' },
   { key: 'communications', label: 'Communications' }
 ];
 
@@ -104,7 +106,7 @@ export default function CaseDetailPage() {
             </div>
             <div className="mt-1 flex flex-wrap items-center gap-2">
               <StatusBadge status={caseDetail.status} />
-              <PriorityBadge priority={caseDetail.priority} />
+              {caseDetail.priority && <PriorityBadge priority={caseDetail.priority} />}
               <span className="text-sm text-neutral-500 dark:text-neutral-300">
                 {caseDetail.borrowerName} | {caseDetail.caseType}
               </span>
@@ -166,6 +168,7 @@ export default function CaseDetailPage() {
       {tab === 'documents' ? <DocumentsTab caseId={caseId} /> : null}
       {tab === 'approvals' ? <ApprovalsTab caseId={caseId} /> : null}
       {tab === 'timeline' ? <TimelineTab caseId={caseId} /> : null}
+      {tab === 'deal360' ? <Deal360Tab dealPayload={caseDetail.metadata as any} /> : null}
       {tab === 'communications' ? <CommunicationsTab caseId={caseId} /> : null}
 
       <TaskWorkbenchModal

@@ -7,6 +7,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -208,10 +209,10 @@ func TestParseSCIMFilter_UnknownAttribute(t *testing.T) {
 
 func TestParseSCIMFilter_ComparisonOperators(t *testing.T) {
 	tests := []struct {
-		name         string
-		expression   string
-		wantRegex    string
-		wantArg      string
+		name       string
+		expression string
+		wantRegex  string
+		wantArg    string
 	}{
 		{name: "eq userName", expression: `userName eq "jsmith"`, wantRegex: `LOWER\(u.username\) = LOWER\(\$1\)`, wantArg: "jsmith"},
 		{name: "co displayName", expression: `displayName co "smith"`, wantRegex: `u.display_name ILIKE \$1`, wantArg: "%smith%"},
@@ -424,6 +425,8 @@ func TestReplaceGroup_ReconcileMembersSingleTransactionBatchedWrites(t *testing.
 	w := httptest.NewRecorder()
 
 	h.ReplaceGroup(w, req)
+
+	fmt.Println("TEST RESPONSE BODY:", w.Body.String())
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	require.NoError(t, mock.ExpectationsWereMet())

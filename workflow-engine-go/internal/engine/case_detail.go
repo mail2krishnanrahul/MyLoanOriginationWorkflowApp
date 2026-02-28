@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -24,11 +25,11 @@ import (
 func GetCaseDetail(
 	ctx context.Context,
 	repo *repository.Repository,
-	referenceNumber string,
+	caseID string,
 ) (CaseDetail, error) {
 
-	// 1. Case header
-	header, err := repo.GetCaseByReference(ctx, referenceNumber)
+	// 1. Case header — look up by UUID (the frontend navigates by case.id)
+	header, err := repo.GetCaseByID(ctx, caseID)
 	if err != nil {
 		return CaseDetail{}, fmt.Errorf("case not found: %w", err)
 	}
@@ -36,7 +37,7 @@ func GetCaseDetail(
 	detail := CaseDetail{
 		CaseID:          header.CaseID,
 		ReferenceNumber: header.ReferenceNumber,
-		CaseTypeCode:    header.CaseTypeCode,
+		CaseType:        header.CaseTypeCode,
 		CaseTypeVersion: header.CaseTypeVersion,
 		Status:          header.Status,
 		CurrentStage:    header.CurrentStage,
@@ -45,6 +46,28 @@ func GetCaseDetail(
 		CreatedAt:       header.CreatedAt,
 		UpdatedAt:       header.UpdatedAt,
 		CompletedAt:     header.CompletedAt,
+		// SLA defaults — real computation would require sla_definitions table
+		SLAStatus:           "ON_TRACK",
+		SLARemainingMinutes: 2880, // 48h default
+	}
+
+	// Extract borrowerName, priority, loanAmount, productType from metadata JSON
+	if len(header.Metadata) > 0 {
+		var meta map[string]interface{}
+		if err := json.Unmarshal(header.Metadata, &meta); err == nil {
+			if v, ok := meta["borrowerName"].(string); ok && v != "" {
+				detail.BorrowerName = &v
+			}
+			if v, ok := meta["priority"].(string); ok && v != "" {
+				detail.Priority = &v
+			}
+			if v, ok := meta["productType"].(string); ok && v != "" {
+				detail.ProductType = &v
+			}
+			if v, ok := meta["loanAmount"].(float64); ok {
+				detail.LoanAmount = v
+			}
+		}
 	}
 
 	// 2. Stage history
@@ -164,30 +187,33 @@ func groupTasksByActivity(rows []repository.TaskStatusRow) []ActivitySummary {
 // HTTP handler: GET /cases/{reference_number}
 // ---------------------------------------------------------------------------
 
-// RegisterCaseDetailHandler attaches the case detail read handler.
+// RegisterCaseDetailHandler attaches the case detail and task sub-route handlers.
 func RegisterCaseDetailHandler(mux *http.ServeMux, repo *repository.Repository) {
-	mux.HandleFunc("GET /cases/{ref}", handleGetCaseDetail(repo))
+	// GET /cases/{id}  — full case detail (fetched by UUID)
+	mux.HandleFunc("GET /cases/{id}", handleGetCaseDetail(repo))
+	// GET /cases/{id}/tasks — tasks for the case (already embedded in detail,
+	// but the frontend requests this endpoint separately)
+	mux.HandleFunc("GET /cases/{id}/tasks", handleGetCaseTasks(repo))
 }
 
 func handleGetCaseDetail(repo *repository.Repository) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ref := r.PathValue("ref")
-		if ref == "" {
-			// Fallback for older Go versions: parse from path
+		id := r.PathValue("id")
+		if id == "" {
 			parts := strings.Split(r.URL.Path, "/")
 			if len(parts) >= 3 {
-				ref = parts[len(parts)-1]
+				id = parts[len(parts)-1]
 			}
 		}
 
-		if ref == "" {
+		if id == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]string{
-				"error": "reference_number is required",
+				"error": "case id is required",
 			})
 			return
 		}
 
-		detail, err := GetCaseDetail(r.Context(), repo, ref)
+		detail, err := GetCaseDetail(r.Context(), repo, id)
 		if err != nil {
 			writeJSON(w, http.StatusNotFound, map[string]string{
 				"error": err.Error(),
@@ -196,6 +222,84 @@ func handleGetCaseDetail(repo *repository.Repository) http.HandlerFunc {
 		}
 
 		writeJSON(w, http.StatusOK, detail)
+	}
+}
+
+// taskSummaryJSON is the wire shape that matches the frontend's TaskSummary type.
+type taskSummaryJSON struct {
+	ID           string  `json:"id"`
+	Name         string  `json:"name"`
+	ActivityName string  `json:"activityName,omitempty"`
+	Status       string  `json:"status"`
+	Priority     string  `json:"priority"`
+	DueAt        *string `json:"dueAt,omitempty"`
+	SLAStatus    string  `json:"slaStatus"`
+}
+
+// priorityIntToString maps the integer priority stored in DB to the string enum the frontend expects.
+func priorityIntToString(p int) string {
+	switch {
+	case p >= 80:
+		return "CRITICAL"
+	case p >= 60:
+		return "HIGH"
+	case p >= 40:
+		return "NORMAL"
+	default:
+		return "LOW"
+	}
+}
+
+// handleGetCaseTasks serves GET /cases/{id}/tasks.
+// Returns a flat TaskSummary[] array matching the frontend contract.
+func handleGetCaseTasks(repo *repository.Repository) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if id == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "case id is required",
+			})
+			return
+		}
+
+		// Load header to get current stage
+		header, err := repo.GetCaseByID(r.Context(), id)
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{
+				"error": err.Error(),
+			})
+			return
+		}
+
+		tasks := []taskSummaryJSON{}
+		if header.CurrentStage != nil {
+			taskRows, err := repo.GetTasksForCurrentStage(r.Context(), id, *header.CurrentStage)
+			if err != nil {
+				slog.Error("GET /cases/{id}/tasks failed", "error", err, "case_id", id)
+				writeJSON(w, http.StatusInternalServerError, map[string]string{
+					"error": "failed to load tasks",
+				})
+				return
+			}
+
+			for _, t := range taskRows {
+				ts := taskSummaryJSON{
+					ID:           t.TaskID,
+					Name:         t.TaskDefinitionCode,
+					ActivityName: t.ActivityCode,
+					Status:       t.Status,
+					Priority:     priorityIntToString(t.Priority),
+					SLAStatus:    "ON_TRACK", // default; real SLA computed from task.due_at
+				}
+				if t.DueAt != nil {
+					formatted := t.DueAt.Format("2006-01-02T15:04:05Z")
+					ts.DueAt = &formatted
+				}
+				tasks = append(tasks, ts)
+			}
+		}
+
+		writeJSON(w, http.StatusOK, tasks)
 	}
 }
 

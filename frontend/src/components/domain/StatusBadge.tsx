@@ -6,6 +6,7 @@ import type { CaseStatus, TaskStatus } from '@/lib/api/types';
 type SupportedStatus = CaseStatus | TaskStatus;
 
 const variantMap: Record<SupportedStatus, 'neutral' | 'brand' | 'warning' | 'danger' | 'success'> = {
+  OPEN: 'brand',
   DRAFT: 'neutral',
   IN_PROGRESS: 'brand',
   PENDING_APPROVAL: 'warning',
@@ -20,6 +21,7 @@ const variantMap: Record<SupportedStatus, 'neutral' | 'brand' | 'warning' | 'dan
 };
 
 const iconMap: Record<SupportedStatus, ComponentType<{ className?: string }>> = {
+  OPEN: Circle,
   DRAFT: Circle,
   IN_PROGRESS: Circle,
   PENDING_APPROVAL: PauseCircle,

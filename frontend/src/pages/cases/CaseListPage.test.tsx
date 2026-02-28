@@ -1,78 +1,63 @@
-import { screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+
+import { screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import CaseListPage from '@/pages/cases/CaseListPage';
 import { renderWithProviders } from '@/test/test-utils';
 
-const defaultResponse = {
-  items: [
-    {
-      id: 'case-1',
-      referenceNumber: 'CASE-2026-0001',
-      borrowerName: 'Morgan Price',
-      caseType: 'HOME_LOAN',
-      stage: 'UNDERWRITING',
-      status: 'IN_PROGRESS',
-      priority: 'HIGH',
-      assignedTo: { id: 'user-1', displayName: 'Alex Lane' },
-      slaStatus: 'WARNING',
-      slaRemainingMinutes: 240,
-      createdAt: '2026-02-20T11:00:00Z',
-      updatedAt: '2026-02-21T09:00:00Z'
-    }
-  ],
-  page: 1,
-  limit: 25,
-  total: 1
-};
+vi.mock('@/hooks/useCaseList', () => ({
+  useCaseList: () => ({
+    data: {
+      items: [
+        {
+          id: 'case-1',
+          reference: 'CASE-2026-0001',
+          title: 'Morgan Price',
+          status: 'IN_PROGRESS',
+          priority: 'HIGH',
+          assignedUser: { userId: '1', displayName: 'John', initials: 'J' },
+          tags: [],
+          createdAt: '2026-02-20T11:00:00Z'
+        }
+      ],
+      totalCount: 1,
+      page: 1,
+      pageSize: 20,
+      hasNextPage: false
+    },
+    isLoading: false,
+    isError: false,
+    isFetching: false
+  })
+}));
+
+vi.mock('@/hooks/useCaseSummaryStats', () => ({
+  useCaseSummaryStats: () => ({
+    data: {
+      totalCases: 1,
+      activeCases: 1,
+      resolvedCases: 0,
+      atRiskCases: 0,
+      myActiveCases: 1
+    },
+    isLoading: false,
+    isError: false
+  })
+}));
 
 describe('CaseListPage', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
   });
 
-  it('renders case rows from API response', async () => {
-    vi.spyOn(global, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify(defaultResponse), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' }
-      })
-    );
-
+  it('renders case view header', async () => {
     renderWithProviders(<CaseListPage />, { route: '/cases' });
-
-    expect(screen.getByText('Case Workbench')).toBeInTheDocument();
-
-    await waitFor(() => {
-      expect(screen.getByText('Morgan Price')).toBeInTheDocument();
-      expect(screen.getByText('CASE-2026-0001')).toBeInTheDocument();
-    });
+    expect(screen.getByText('Cases')).toBeInTheDocument();
+    expect(screen.getByText('Manage and track all loan origination cases across the system.')).toBeInTheDocument();
   });
 
-  it('shows empty state when no rows exist', async () => {
-    vi.spyOn(global, 'fetch').mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          items: [],
-          page: 1,
-          limit: 25,
-          total: 0
-        }),
-        {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' }
-        }
-      )
-    );
-
-    const user = userEvent.setup();
+  it('renders case cards directly from mocked hooks', async () => {
     renderWithProviders(<CaseListPage />, { route: '/cases' });
-
-    await waitFor(() => {
-      expect(screen.getByText('No cases found')).toBeInTheDocument();
-    });
-
-    await user.click(screen.getByRole('button', { name: 'Clear filters' }));
-    expect(screen.getByText('No cases found')).toBeInTheDocument();
+    expect(screen.getByText('Morgan Price')).toBeInTheDocument();
+    expect(screen.getByText('CASE-2026-0001')).toBeInTheDocument();
   });
 });

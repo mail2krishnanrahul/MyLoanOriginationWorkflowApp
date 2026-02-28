@@ -16,16 +16,27 @@ function getCasesPath(scope: CaseFilters['scope']) {
   return '/api/cases';
 }
 
-export function useCases(filters: CaseFilters, userId = 'me', teamId = 'team-1') {
+// isUUID returns true when s looks like a valid UUID (not a sentinel like 'me').
+function isUUID(s: string | undefined): boolean {
+  if (!s) return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+}
+
+export function useCases(filters: CaseFilters, teamId = 'team-1') {
   return useQuery({
     queryKey: queryKeys.cases(filters),
     queryFn: ({ signal }) =>
       apiFetch<PaginatedResponse<CaseListItem>>(getCasesPath(filters.scope), {
         signal,
         params: {
+          // When scope=my the backend already applies assigned_user_id filter via the
+          // scope clause, so we send the scope param and omit assignedTo to avoid the
+          // "invalid input syntax for type uuid: 'me'" SQL error.
+          scope: filters.scope,
           page: filters.page,
           limit: filters.limit,
-          assignedTo: filters.scope === 'my' ? userId : filters.assignedTo,
+          // Only send assignedTo when it is a real UUID – never the 'me' sentinel.
+          assignedTo: isUUID(filters.assignedTo) ? filters.assignedTo : undefined,
           teamId: filters.scope === 'team' ? teamId : undefined,
           status: filters.status,
           stage: filters.stage,

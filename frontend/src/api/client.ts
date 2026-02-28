@@ -2,7 +2,7 @@ import axios, { AxiosError, AxiosInstance, InternalAxiosRequestConfig } from 'ax
 
 // Create base Axios instance
 export const api: AxiosInstance = axios.create({
-    baseURL: import.meta.env.VITE_API_URL || 'http://localhost:8080/api/v1',
+    baseURL: import.meta.env.VITE_API_URL || '/api',
     headers: {
         'Content-Type': 'application/json',
     },
@@ -10,7 +10,7 @@ export const api: AxiosInstance = axios.create({
     withCredentials: true, // For passing cookies if needed
 });
 
-// Request Interceptor: Add Authorization header
+// Request Interceptor: Add Authorization header and Tenant ID
 api.interceptors.request.use(
     (config: InternalAxiosRequestConfig) => {
         // In a real app, you'd fetch this from Zustand/Redux or localStorage
@@ -18,6 +18,12 @@ api.interceptors.request.use(
         if (token && config.headers) {
             config.headers.Authorization = `Bearer ${token}`;
         }
+
+        // Inject default Tenant ID for local development
+        if (config.headers) {
+            config.headers['X-Tenant-ID'] = import.meta.env.VITE_TENANT_ID || 'DEFAULT';
+        }
+
         return config;
     },
     (error: AxiosError) => {

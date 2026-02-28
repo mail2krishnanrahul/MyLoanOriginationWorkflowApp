@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib" // Use pgx as the underlying driver
@@ -45,7 +46,7 @@ func NewConnectionFromURL(dsn string, cfg Config) (*sqlx.DB, error) {
 		if err == nil {
 			break
 		}
-		fmt.Printf("Attempt %d: Failed to connect to database (%s). Retrying in 2 seconds...\n", i+1, dsn)
+		slog.Warn("Failed to connect to database. Retrying...", "attempt", i+1, "dsn", dsn)
 		time.Sleep(2 * time.Second)
 	}
 

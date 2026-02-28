@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 const caseStatusSchema = z.enum([
+  'OPEN',
   'DRAFT',
   'IN_PROGRESS',
   'PENDING_APPROVAL',
@@ -23,12 +24,16 @@ export const userSummarySchema = z.object({
 export const caseListItemSchema = z.object({
   id: z.string(),
   referenceNumber: z.string(),
-  borrowerName: z.string(),
+  // API returns null when no borrower name is set in metadata
+  borrowerName: z.string().nullable().optional(),
   caseType: z.string(),
-  stage: z.string(),
+  // API field is currentStage (not stage)
+  currentStage: z.string().nullable().optional(),
   status: caseStatusSchema,
-  priority: prioritySchema,
-  assignedTo: userSummarySchema.optional(),
+  // API returns null when priority is not set
+  priority: prioritySchema.nullable().optional(),
+  // API returns a UUID string (or null), not a nested user object
+  assignedTo: z.string().nullable().optional(),
   slaStatus: slaStatusSchema,
   slaRemainingMinutes: z.number(),
   tags: z.array(z.string()).optional(),

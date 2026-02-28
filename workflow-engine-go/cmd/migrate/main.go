@@ -2,7 +2,6 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"log/slog"
 	"os"
 	"strconv"
@@ -31,12 +30,7 @@ func main() {
 	args := flag.Args()
 
 	if len(args) < 1 {
-		fmt.Println("Usage: migrate <command> [options]")
-		fmt.Println("\nCommands:")
-		fmt.Println("  up                Run all up migrations")
-		fmt.Println("  down <steps>      Roll back the specified number of migrations")
-		fmt.Println("  version           Print current migration version")
-		fmt.Println("  force <version>   Force migration version (use to fix dirty state)")
+		slog.Info("Usage: migrate <command> [options]\nCommands:\n  up                Run all up migrations\n  down <steps>      Roll back the specified number of migrations\n  version           Print current migration version\n  force <version>   Force migration version (use to fix dirty state)")
 		os.Exit(1)
 	}
 
@@ -70,7 +64,7 @@ func main() {
 			slog.Error("Failed to check version", "error", err)
 			os.Exit(1)
 		}
-		fmt.Printf("Current migration version: %d (Dirty: %v)\n", version, dirty)
+		slog.Info("Current migration status", "version", version, "dirty", dirty)
 
 	case "force":
 		if len(args) < 2 {

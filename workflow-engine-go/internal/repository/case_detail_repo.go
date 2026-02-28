@@ -50,6 +50,28 @@ func (r *Repository) GetCaseByReference(ctx context.Context, ref string) (*CaseH
 	return &h, nil
 }
 
+// GetCaseByID fetches a case by its UUID primary key,
+// joining with case_types to include the code.
+func (r *Repository) GetCaseByID(ctx context.Context, id string) (*CaseHeader, error) {
+	var h CaseHeader
+	err := r.Pool.QueryRow(ctx, `
+		SELECT c.id, c.reference_number, ct.code, c.case_type_version,
+		       c.status, c.current_stage_code, c.assigned_to,
+		       c.metadata, c.created_at, c.updated_at, c.completed_at
+		FROM cases c
+		JOIN case_types ct ON ct.id = c.case_type_id
+		WHERE c.id = $1::uuid`, id,
+	).Scan(
+		&h.CaseID, &h.ReferenceNumber, &h.CaseTypeCode, &h.CaseTypeVersion,
+		&h.Status, &h.CurrentStage, &h.AssignedTo,
+		&h.Metadata, &h.CreatedAt, &h.UpdatedAt, &h.CompletedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("case %s not found: %w", id, err)
+	}
+	return &h, nil
+}
+
 // GetStageHistory fetches all stage transitions for a case, ordered chronologically.
 func (r *Repository) GetStageHistory(ctx context.Context, caseID string) ([]model.CaseStageTransition, error) {
 	rows, err := r.Pool.Query(ctx, `

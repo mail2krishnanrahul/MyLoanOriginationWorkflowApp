@@ -27,6 +27,7 @@ export function AppRouter() {
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/admin" element={<AdminHubPage />} />
           <Route path="/cases" element={<CaseListPage />} />
+          <Route path="/cases/my" element={<CaseListPage />} />
           <Route path="/cases/:caseId" element={<CaseDetailPage />} />
           <Route path="/workbaskets" element={<WorkbasketPage />} />
           <Route path="*" element={<Navigate to="/dashboard" replace />} />

@@ -32,6 +32,13 @@ func generateTeamCode(displayName string) string {
 	return base + suffix
 }
 
+func postgresUUIDArray(ids []string) string {
+	if len(ids) == 0 {
+		return "{}"
+	}
+	return "{" + strings.Join(ids, ",") + "}"
+}
+
 // GetGroup handles GET /scim/v2/Groups/{id}.
 func (h *SCIMHandler) GetGroup(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", scimContentType)
@@ -136,7 +143,7 @@ func validateUsersExistForMembership(ctx context.Context, tx *sqlx.Tx, tenantID 
 		FROM users
 		WHERE tenant_id = $1::uuid
 		  AND user_id = ANY($2::uuid[])
-	`, tenantID, userIDs); err != nil {
+	`, tenantID, postgresUUIDArray(userIDs)); err != nil {
 		return fmt.Errorf("validateUsersExistForMembership: query users: %w", err)
 	}
 	if len(rows) != len(userIDs) {
@@ -225,7 +232,7 @@ func (h *SCIMHandler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 			FROM unnest($3::uuid[]) AS u
 			ON CONFLICT (team_id, user_id)
 			DO UPDATE SET role_in_team = EXCLUDED.role_in_team
-		`, groupID, tenantID, memberIDs); err != nil {
+		`, groupID, tenantID, postgresUUIDArray(memberIDs)); err != nil {
 			writeSCIMError(w, http.StatusInternalServerError, "", "failed to add members")
 			return
 		}
@@ -313,7 +320,7 @@ func replaceGroupMembersTx(ctx context.Context, tx *sqlx.Tx, tenantID, groupID s
 			FROM unnest($3::uuid[]) AS u
 			ON CONFLICT (team_id, user_id)
 			DO UPDATE SET role_in_team = EXCLUDED.role_in_team
-		`, groupID, tenantID, toAdd); err != nil {
+		`, groupID, tenantID, postgresUUIDArray(toAdd)); err != nil {
 			return fmt.Errorf("replaceGroupMembersTx: insert additions: %w", err)
 		}
 	}
@@ -323,7 +330,7 @@ func replaceGroupMembersTx(ctx context.Context, tx *sqlx.Tx, tenantID, groupID s
 			WHERE tenant_id = $1::uuid
 			  AND team_id = $2::uuid
 			  AND user_id = ANY($3::uuid[])
-		`, tenantID, groupID, toRemove); err != nil {
+		`, tenantID, groupID, postgresUUIDArray(toRemove)); err != nil {
 			return fmt.Errorf("replaceGroupMembersTx: delete removals: %w", err)
 		}
 	}

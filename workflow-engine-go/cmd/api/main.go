@@ -106,6 +106,7 @@ func main() {
 	engine.RegisterCaseListHandler(apiMux, repo)
 	engine.RegisterCaseDetailHandler(apiMux, repo)
 	engine.RegisterAuditHandlers(apiMux, repo)
+	engine.RegisterWorkbasketHandlers(apiMux, repo)
 	notification.RegisterNotificationHandlers(apiMux, db, slog.Default())
 	integration.RegisterDealIngestionHandlers(apiMux, db, slog.Default())
 

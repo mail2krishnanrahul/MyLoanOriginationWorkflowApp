@@ -11,8 +11,11 @@ import (
 	"time"
 
 	"workflow-engine/internal/database"
+	"workflow-engine/internal/engine"
 	"workflow-engine/internal/integration"
 	"workflow-engine/internal/multitenancy"
+	"workflow-engine/internal/notification"
+	"workflow-engine/internal/repository"
 	"workflow-engine/internal/server"
 
 	"github.com/joho/godotenv"
@@ -58,6 +61,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	pgxDB, err := database.Connect(context.Background(), dbURL)
+	if err != nil {
+		slog.Error("Failed to connect pgxpool to database", "err", err)
+		os.Exit(1)
+	}
+	defer pgxDB.Close()
+
 	// 2. Run Migrations (optional, usually preferred via cmd/migrate but can run up cleanly on pod start)
 	migrationsDir := os.Getenv("MIGRATIONS_DIR")
 	if migrationsDir == "" {
@@ -83,8 +93,23 @@ func main() {
 		w.Write([]byte(`{"status":"up","database":true}`))
 	})
 
+	// 4. OpenAPI / Swagger Docs
+	rootMux.HandleFunc("GET /swagger/openapi.yaml", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "docs/openapi.yaml")
+	})
+	rootMux.HandleFunc("GET /swagger/", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "docs/swagger.html")
+	})
+
+	repo := repository.NewRepository(pgxDB.Pool)
+	engine.RegisterCaseHandlers(apiMux, repo)
+	engine.RegisterCaseListHandler(apiMux, repo)
+	engine.RegisterCaseDetailHandler(apiMux, repo)
+	engine.RegisterAuditHandlers(apiMux, repo)
+	notification.RegisterNotificationHandlers(apiMux, db, slog.Default())
 	integration.RegisterDealIngestionHandlers(apiMux, db, slog.Default())
-	rootMux.Handle("/", multitenancy.TenantMiddleware(db, apiMux))
+
+	rootMux.Handle("/api/", http.StripPrefix("/api", multitenancy.TenantMiddleware(db, apiMux)))
 
 	// Bind middleware stack
 	allowedOrigins := os.Getenv("CORS_ALLOWED_ORIGINS")

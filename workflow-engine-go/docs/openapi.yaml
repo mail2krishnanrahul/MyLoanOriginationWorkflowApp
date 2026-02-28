@@ -1,0 +1,192 @@
+openapi: 3.0.0
+info:
+  title: Loan Origination Workflow API
+  version: 1.0.0
+  description: API for the Loan Origination Workflow Engine including Deal Ingestion, Case Management, and Notifications.
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+
+components:
+  securitySchemes:
+    TenantHeader:
+      type: apiKey
+      in: header
+      name: X-Tenant-Id
+      description: Tenant identifier (e.g. "DEFAULT")
+
+security:
+  - TenantHeader: []
+
+paths:
+  /health:
+    get:
+      summary: Health check probe
+      security: []
+      responses:
+        '200':
+          description: OK
+        '503':
+          description: Service Unavailable
+
+  /ingest/deals:
+    post:
+      summary: Ingest a Business Lending Deal
+      parameters:
+        - name: X-Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+        - name: X-Source-System
+          in: header
+          required: false
+          schema:
+            type: string
+            enum: [ORIGINATION, MANUAL_OVERRIDE, MIGRATION]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sourceSystem:
+                  type: string
+                correlationId:
+                  type: string
+                snapshotTimestamp:
+                  type: string
+                  format: date-time
+                snapshot:
+                  type: object
+      responses:
+        '202':
+          description: Accepted
+        '422':
+          description: Unprocessable Entity
+
+  /ingest/deals/{dealId}/history:
+    get:
+      summary: Get ingestion history for a deal
+      parameters:
+        - name: dealId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+
+  /cases:
+    post:
+      summary: Create a new case
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                case_type_code:
+                  type: string
+                requested_by:
+                  type: string
+                metadata:
+                  type: object
+      responses:
+        '201':
+          description: Created
+        '400':
+          description: Bad Request
+
+  /cases/{ref}:
+    get:
+      summary: Get case details by reference number
+      parameters:
+        - name: ref
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+        '404':
+          description: Not Found
+
+  /cases/{ref}/audit:
+    get:
+      summary: Get audit trail for a case
+      parameters:
+        - name: ref
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: action
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: OK
+        '404':
+          description: Not Found
+
+  /cases/{case_id}/notifications:
+    get:
+      summary: Get notification history for a case
+      parameters:
+        - name: case_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+
+  /cases/{case_id}/correspondence-summary:
+    get:
+      summary: Get correspondence summary for a case
+      parameters:
+        - name: case_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+
+  /notifications/{id}/acknowledge:
+    post:
+      summary: Acknowledge a notification
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+        '400':
+          description: Bad Request
+        '422':
+          description: Unprocessable Entity

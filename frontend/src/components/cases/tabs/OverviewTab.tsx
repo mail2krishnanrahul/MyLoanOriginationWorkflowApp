@@ -53,7 +53,7 @@ export function OverviewTab({ caseDetail, onOpenNextTask }: OverviewTabProps) {
               </span>
               <span className="text-neutral-400">&rarr;</span>
               <span className="rounded-full bg-brand-50 px-2 py-1 text-brand-700 dark:bg-brand-500/15 dark:text-brand-200">
-                Current: {caseDetail.stage}
+                Current: {caseDetail.currentStage ?? caseDetail.stage ?? '--'}
               </span>
               <span className="text-neutral-400">&rarr;</span>
               <span className="rounded-full bg-accent-50 px-2 py-1 text-accent-700 dark:bg-accent-500/15 dark:text-accent-200">
@@ -80,14 +80,14 @@ export function OverviewTab({ caseDetail, onOpenNextTask }: OverviewTabProps) {
 
           <div className="space-y-2">
             {caseDetail.activities.map((activity) => (
-              <details key={activity.id} className="panel-muted p-3" open>
+              <details key={activity.activityCode} className="panel-muted p-3" open>
                 <summary className="cursor-pointer list-none text-sm font-semibold text-neutral-800 dark:text-neutral-100">
-                  {activity.name} ({activity.tasksCompleted}/{activity.tasksTotal})
+                  {activity.activityCode} ({activity.completed}/{activity.total})
                 </summary>
-                <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-300">{activity.description}</p>
+
                 <ul className="mt-2 space-y-1 text-xs text-neutral-600 dark:text-neutral-200">
                   {activity.tasks.map((task) => (
-                    <li key={task.id} className="flex items-center justify-between gap-2 rounded-md bg-white px-2 py-1 dark:bg-neutral-900">
+                    <li key={task.taskId} className="flex items-center justify-between gap-2 rounded-md bg-white px-2 py-1 dark:bg-neutral-900">
                       <span>{task.name}</span>
                       <StatusBadge status={task.status} />
                     </li>

@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -6,31 +6,37 @@
 
 :root {
   color-scheme: light;
-  --bg: 248 250 252;
+  --bg: 245 247 250;
   --bg-panel: 255 255 255;
   --bg-muted: 241 245 249;
   --fg: 15 23 42;
   --fg-muted: 71 85 105;
   --ring: 15 130 255;
-  --border: 226 232 240;
+  --border: 218 226 238;
+  --sidebar-bg: 13 19 35;
+  --sidebar-fg: 226 232 240;
+  --sidebar-accent: 56 189 248;
 }
 
 .dark {
   color-scheme: dark;
-  --bg: 7 13 24;
-  --bg-panel: 15 23 42;
-  --bg-muted: 30 41 59;
-  --fg: 241 245 249;
-  --fg-muted: 148 163 184;
+  --bg: 7 12 22;
+  --bg-panel: 14 22 40;
+  --bg-muted: 22 33 56;
+  --fg: 237 242 250;
+  --fg-muted: 140 158 185;
   --ring: 56 189 248;
-  --border: 51 65 85;
+  --border: 38 54 90;
+  --sidebar-bg: 8 13 26;
+  --sidebar-fg: 218 228 245;
+  --sidebar-accent: 99 210 255;
 }
 
 body {
   @apply m-0 min-h-screen font-sans antialiased;
   background:
-    radial-gradient(circle at top right, rgb(15 130 255 / 0.12), transparent 45%),
-    radial-gradient(circle at 12% 18%, rgb(251 143 6 / 0.1), transparent 35%),
+    radial-gradient(ellipse 90% 60% at 70% -10%, rgb(15 130 255 / 0.09), transparent 55%),
+    radial-gradient(ellipse 60% 50% at 5% 95%, rgb(99 102 241 / 0.07), transparent 45%),
     rgb(var(--bg));
   color: rgb(var(--fg));
 }
@@ -40,13 +46,29 @@ body {
 }
 
 ::selection {
-  background: rgb(15 130 255 / 0.2);
+  background: rgb(15 130 255 / 0.18);
 }
 
+/* ── Core panels ── */
 .panel {
   @apply rounded-2xl border shadow-panel;
   border-color: rgb(var(--border));
   background-color: rgb(var(--bg-panel));
+}
+
+.panel-glass {
+  @apply rounded-2xl border;
+  border-color: rgb(var(--border) / 0.7);
+  background: linear-gradient(
+    135deg,
+    rgb(var(--bg-panel) / 0.95) 0%,
+    rgb(var(--bg-panel) / 0.88) 100%
+  );
+  backdrop-filter: blur(16px) saturate(180%);
+  box-shadow:
+    0 4px 24px rgb(15 23 42 / 0.08),
+    0 1px 4px rgb(15 23 42 / 0.05),
+    inset 0 1px 0 rgb(255 255 255 / 0.12);
 }
 
 .panel-muted {
@@ -55,17 +77,34 @@ body {
   background-color: rgb(var(--bg-muted));
 }
 
+/* ── Focus ring ── */
 .focus-ring {
   @apply outline-none ring-2 ring-offset-2 ring-offset-transparent;
   --tw-ring-color: rgb(var(--ring));
 }
 
+/* ── Scrollbar ── */
 .scrollbar-thin::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 6px;
+  height: 6px;
 }
-
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
 .scrollbar-thin::-webkit-scrollbar-thumb {
-  background-color: rgb(148 163 184 / 0.6);
+  background-color: rgb(var(--fg-muted) / 0.35);
   border-radius: 999px;
 }
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background-color: rgb(var(--fg-muted) / 0.55);
+}
+
+/* ── Stat card accent gradients ── */
+.stat-blue   { background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%); border-color: #bfdbfe; }
+.stat-red    { background: linear-gradient(135deg, #fff1f2 0%, #ffe4e6 100%); border-color: #fecdd3; }
+.stat-green  { background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border-color: #bbf7d0; }
+.stat-amber  { background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%); border-color: #fde68a; }
+.dark .stat-blue   { background: linear-gradient(135deg, rgb(37 99 235 / 0.12) 0%, rgb(59 130 246 / 0.07) 100%); border-color: rgb(59 130 246 / 0.25); }
+.dark .stat-red    { background: linear-gradient(135deg, rgb(220 38 38 / 0.12) 0%, rgb(239 68 68 / 0.07) 100%); border-color: rgb(239 68 68 / 0.25); }
+.dark .stat-green  { background: linear-gradient(135deg, rgb(22 163 74 / 0.12) 0%, rgb(34 197 94 / 0.07) 100%); border-color: rgb(34 197 94 / 0.25); }
+.dark .stat-amber  { background: linear-gradient(135deg, rgb(217 119 6 / 0.12) 0%, rgb(245 158 11 / 0.07) 100%); border-color: rgb(245 158 11 / 0.25); }

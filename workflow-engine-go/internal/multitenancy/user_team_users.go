@@ -13,6 +13,13 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
+func postgresUUIDArray(ids []string) string {
+	if len(ids) == 0 {
+		return "{}"
+	}
+	return "{" + strings.Join(ids, ",") + "}"
+}
+
 // CreateUser creates a tenant-scoped user and emits USER_CREATED in the same transaction.
 func CreateUser(
 	ctx context.Context,
@@ -291,7 +298,7 @@ func DeactivateUser(
 			    version = version + 1
 			WHERE tenant_id = $1::uuid
 			  AND id = ANY($2::uuid[])
-		`, resolvedTenantID, taskIDs); err != nil {
+		`, resolvedTenantID, postgresUUIDArray(taskIDs)); err != nil {
 			return fmt.Errorf("DeactivateUser: unassign open tasks: %w", err)
 		}
 
@@ -305,13 +312,13 @@ func DeactivateUser(
 			}
 			taskID := tasks[i].TaskID
 			if err := publishUserTeamEventTx(ctx, tx, resolvedTenantID, caseID, &taskID, model.EventTaskUnassigned, map[string]interface{}{
-				"task_id":        taskID,
-				"user_id":        userID,
-				"tenant_id":      resolvedTenantID,
-				"unassigned_by":  deactivatedBy,
-				"reason":         reason,
-				"source":         "user_deactivation",
-				"occurred_at":    time.Now().UTC(),
+				"task_id":       taskID,
+				"user_id":       userID,
+				"tenant_id":     resolvedTenantID,
+				"unassigned_by": deactivatedBy,
+				"reason":        reason,
+				"source":        "user_deactivation",
+				"occurred_at":   time.Now().UTC(),
 			}); err != nil {
 				return fmt.Errorf("DeactivateUser: publish TASK_UNASSIGNED for task %s: %w", taskID, err)
 			}
@@ -319,12 +326,12 @@ func DeactivateUser(
 	}
 
 	if err := publishUserTeamEventTx(ctx, tx, resolvedTenantID, nil, nil, model.EventUserDeactivated, map[string]interface{}{
-		"user_id":         userID,
-		"tenant_id":       resolvedTenantID,
-		"deactivated_by":  deactivatedBy,
-		"reason":          reason,
+		"user_id":          userID,
+		"tenant_id":        resolvedTenantID,
+		"deactivated_by":   deactivatedBy,
+		"reason":           reason,
 		"unassigned_tasks": len(tasks),
-		"occurred_at":     time.Now().UTC(),
+		"occurred_at":      time.Now().UTC(),
 	}); err != nil {
 		return fmt.Errorf("DeactivateUser: publish USER_DEACTIVATED: %w", err)
 	}
@@ -397,10 +404,10 @@ func ReactivateUser(
 	}
 
 	if err := publishUserTeamEventTx(ctx, tx, resolvedTenantID, nil, nil, model.EventUserReactivated, map[string]interface{}{
-		"user_id":         userID,
-		"tenant_id":       resolvedTenantID,
-		"reactivated_by":  reactivatedBy,
-		"occurred_at":     time.Now().UTC(),
+		"user_id":        userID,
+		"tenant_id":      resolvedTenantID,
+		"reactivated_by": reactivatedBy,
+		"occurred_at":    time.Now().UTC(),
 	}); err != nil {
 		return fmt.Errorf("ReactivateUser: publish USER_REACTIVATED: %w", err)
 	}
@@ -475,10 +482,10 @@ func UpdateUserProfile(
 	}
 
 	if err := publishUserTeamEventTx(ctx, tx, resolvedTenantID, nil, nil, model.EventUserProfileUpdated, map[string]interface{}{
-		"user_id":      userID,
-		"tenant_id":    resolvedTenantID,
-		"updated_by":   input.UpdatedBy,
-		"occurred_at":  time.Now().UTC(),
+		"user_id":     userID,
+		"tenant_id":   resolvedTenantID,
+		"updated_by":  input.UpdatedBy,
+		"occurred_at": time.Now().UTC(),
 	}); err != nil {
 		return User{}, fmt.Errorf("UpdateUserProfile: publish USER_PROFILE_UPDATED: %w", err)
 	}

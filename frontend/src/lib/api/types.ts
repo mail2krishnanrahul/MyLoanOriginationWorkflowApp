@@ -2,6 +2,7 @@ export type Priority = 'CRITICAL' | 'HIGH' | 'NORMAL' | 'LOW';
 export type SlaState = 'ON_TRACK' | 'WARNING' | 'BREACHED';
 
 export type CaseStatus =
+  | 'OPEN'
   | 'DRAFT'
   | 'IN_PROGRESS'
   | 'PENDING_APPROVAL'
@@ -20,12 +21,13 @@ export interface UserSummary {
 export interface CaseListItem {
   id: string;
   referenceNumber: string;
-  borrowerName: string;
+  borrowerName?: string | null;
   caseType: string;
-  stage: string;
+  currentStage?: string | null;
   status: CaseStatus;
-  priority: Priority;
-  assignedTo?: UserSummary;
+  priority?: Priority | null;
+  // API returns a UUID string (not a nested user object)
+  assignedTo?: string | null;
   slaStatus: SlaState;
   slaRemainingMinutes: number;
   tags?: string[];
@@ -59,33 +61,72 @@ export interface CaseFilters {
 export interface CaseDetail {
   id: string;
   referenceNumber: string;
-  borrowerName: string;
+  borrowerName?: string | null;
   caseType: string;
+  caseTypeVersion?: number;
   status: CaseStatus;
-  priority: Priority;
-  stage: string;
-  stageDescription?: string;
-  loanAmount: number;
-  productType: string;
-  channel: string;
-  officer: string;
-  targetCloseDate?: string;
-  createdAt: string;
-  updatedAt: string;
+  currentStage?: string | null;
+  assignedTo?: string | null;
+  priority?: Priority | null;
+  productType?: string | null;
+  loanAmount?: number;
+  // SLA
   slaStatus: SlaState;
   slaRemainingMinutes: number;
-  tasksCompleted: number;
+  // Progress
+  percentComplete: number;
   tasksTotal: number;
+  tasksCompleted: number;
+  // Related
+  stageHistory: StageHistoryEntry[];
+  subCases: SubCaseSummary[];
   activities: ActivitySummary[];
+  // Legacy/extra fields (may be absent)
+  stage?: string;
+  stageDescription?: string;
+  targetCloseDate?: string;
+  channel?: string;
+  officer?: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface StageHistoryEntry {
+  fromStage?: string | null;
+  toStage: string;
+  isRegression: boolean;
+  reason?: string | null;
+  triggeredBy: string;
+  transitionAt: string;
+}
+
+export interface SubCaseSummary {
+  caseId: string;
+  referenceNumber: string;
+  caseType: string;
+  status: CaseStatus;
+  currentStage?: string | null;
 }
 
 export interface ActivitySummary {
-  id: string;
+  activityCode: string;
+  tasks: TaskSummaryNested[];
+  statusCounts: Record<string, number>;
+  total: number;
+  completed: number;
+}
+
+// TaskSummaryNested is the shape of tasks inside caseDetail.activities[]
+export interface TaskSummaryNested {
+  taskId: string;
   name: string;
-  description?: string;
-  tasksCompleted: number;
-  tasksTotal: number;
-  tasks: TaskSummary[];
+  status: TaskStatus;
+  priorityRaw?: number;
+  assignedService?: string | null;
+  dueAt?: string | null;
+  completedAt?: string | null;
 }
 
 export type TaskStatus = 'PENDING' | 'IN_PROGRESS' | 'DONE' | 'FAILED' | 'BLOCKED';
@@ -173,14 +214,14 @@ export interface ApprovalRequest {
 export interface TimelineEvent {
   id: string;
   type:
-    | 'CASE_CREATED'
-    | 'STAGE_CHANGED'
-    | 'TASK_COMPLETED'
-    | 'DOCUMENT_UPLOADED'
-    | 'APPROVAL_GRANTED'
-    | 'SLA_WARNING'
-    | 'COMMENT'
-    | 'NOTIFICATION';
+  | 'CASE_CREATED'
+  | 'STAGE_CHANGED'
+  | 'TASK_COMPLETED'
+  | 'DOCUMENT_UPLOADED'
+  | 'APPROVAL_GRANTED'
+  | 'SLA_WARNING'
+  | 'COMMENT'
+  | 'NOTIFICATION';
   actor: UserSummary;
   timestamp: string;
   description: string;
@@ -221,4 +262,201 @@ export interface ApiErrorPayload {
   message: string;
   code?: string;
   details?: unknown;
+}
+
+// --- Deal 360 Complex Structure ---
+
+export interface CurrencyAmount {
+  amount: number;
+  currency: string;
+}
+
+export interface Address {
+  line1: string;
+  line2?: string;
+  suburb: string;
+  state: string;
+  postcode: string;
+  country: string;
+}
+
+export interface LegalParty {
+  partyId: string;
+  partyType: 'COMPANY' | 'INDIVIDUAL' | 'TRUST';
+  legalName: string;
+  companyType?: string;
+  regulatory?: {
+    abn?: string;
+    acn?: string;
+    tfnStatus?: string;
+    gstRegistered?: boolean;
+  };
+  contact?: {
+    email?: string;
+    phone?: string;
+    address?: Address;
+  };
+  roles: string[];
+}
+
+export interface TrustStructure {
+  trustId: string;
+  trustName: string;
+  trustType: string;
+  trustDeedDate?: string;
+  trustees: Array<{
+    partyId: string;
+    trusteeType: string;
+    capacityStatement?: string;
+  }>;
+  appointor?: string;
+  regulatory?: {
+    tfnStatus?: string;
+  };
+}
+
+export interface Fee {
+  feeType: string;
+  amount: CurrencyAmount;
+}
+
+export interface FacilityPricing {
+  rateType: 'VARIABLE' | 'FIXED';
+  interestRate: number;
+  margin: number;
+  index: string;
+  fees?: Fee[];
+}
+
+export interface Guarantee {
+  guaranteeType: string;
+  guarantor: {
+    guarantorType: string;
+    partyId?: string;
+    relationshipToBorrower?: string;
+  };
+  scope: string;
+  limitedAmount?: CurrencyAmount;
+  notes?: string;
+}
+
+export interface Facility {
+  facilityId: string;
+  product: string;
+  status: string;
+  purpose: string;
+  facilityLimit: CurrencyAmount;
+  umbrellaConsumption?: {
+    consumptionAmount: CurrencyAmount;
+    rationale?: string;
+  };
+  pricing?: FacilityPricing;
+  term?: {
+    startDate: string;
+    endDate: string;
+    termMonths: number;
+  };
+  repayment?: {
+    repaymentType: string;
+    frequency: string;
+    amortisationMonths: number;
+  };
+  guarantees?: Guarantee[];
+  settledAt?: string | null;
+  closedAt?: string | null;
+}
+
+export interface BorrowingEntity {
+  borrowingEntityId: string;
+  borrowingEntityType: 'DIRECT' | 'TRUST';
+  trustId?: string;
+  displayName: string;
+  obligors: Array<{
+    partyId: string;
+    liabilityType: string;
+    capacity: string;
+    capacityStatement?: string;
+  }>;
+  facilities: Facility[];
+}
+
+export interface UmbrellaLimit {
+  umbrellaLimitId: string;
+  approvedLimit: CurrencyAmount;
+  currentUtilisation: CurrencyAmount;
+  availableHeadroom: CurrencyAmount;
+  exposureMethod: string;
+  lastReconciledAt: string;
+}
+
+export interface AssetValuation {
+  value: CurrencyAmount;
+  valuationDate: string;
+  basis: string;
+  valuer: string;
+}
+
+export interface Asset {
+  assetId: string;
+  assetType: 'PROPERTY' | 'GSA' | 'VEHICLE' | 'TERM_DEPOSIT' | 'OTHER';
+  propertyType?: string;
+  address?: Address;
+  titleReference?: string;
+  occupancyStatus?: string;
+  securedParty?: string;
+  coverage?: string;
+  ppsrRegistrationNumber?: string;
+  valuation?: AssetValuation;
+}
+
+export interface Collateral {
+  collateralId: string;
+  collateralType: string;
+  securityProviderPartyIds: string[];
+  ranking: string;
+  assets: Asset[];
+}
+
+export interface PriorityAllocation {
+  borrowingEntityId: string;
+  facilityId: string;
+  collateralId: string;
+  allocatedAmount: CurrencyAmount;
+  priority: number;
+  notes?: string;
+}
+
+export interface DealSecurity {
+  secured: boolean;
+  unsecuredReason?: string | null;
+  collaterals?: Collateral[];
+  facilityAllocations?: PriorityAllocation[];
+}
+
+export interface DealPayload {
+  dealId: string;
+  dealName: string;
+  status: string;
+  banker?: {
+    bankerId: string;
+    channel: string;
+    portfolio: string;
+  };
+  customerReference?: string;
+  umbrellaLimit?: UmbrellaLimit;
+  legalParties?: LegalParty[];
+  trustStructures?: TrustStructure[];
+  borrowingEntities?: BorrowingEntity[];
+  security?: DealSecurity;
+  lifecycleHistory?: Array<{
+    operationId: string;
+    type: string;
+    requestedAt: string;
+    requestedBy: string;
+    status: string;
+    summary: string;
+  }>;
+  notes?: string;
+  createdAt?: string;
+  updatedAt?: string;
 }

@@ -44,12 +44,15 @@ func TenantMiddleware(db *sqlx.DB, next http.Handler) http.Handler {
 			}
 		}
 		if identifier == "" {
-			writeTenantError(w, http.StatusBadRequest, ErrTenantNotFound.Error())
-			return
+			// Fall back to the DEFAULT tenant when no tenant header is present.
+			// This supports single-tenant dev deployments and non-tenant-aware API clients.
+			identifier = "DEFAULT"
 		}
 
+		slog.Debug("tenant middleware resolving", "identifier", identifier, "path", path)
 		tenant, err := loadTenantByIdentifier(r.Context(), db, identifier)
 		if err != nil {
+			slog.Warn("tenant middleware lookup failed", "identifier", identifier, "error", err)
 			if errors.Is(err, ErrTenantNotFound) {
 				writeTenantError(w, http.StatusNotFound, ErrTenantNotFound.Error())
 				return
@@ -86,7 +89,7 @@ func loadTenantByIdentifier(ctx context.Context, db *sqlx.DB, identifier string)
 	q := `
 		SELECT tenant_id::text AS tenant_id, tenant_code, name, status, tier, config, created_at, updated_at
 		FROM tenants
-		WHERE tenant_id = $1::uuid
+		WHERE tenant_id::text = $1
 	`
 	args := []interface{}{identifier}
 	if !uuidPattern.MatchString(identifier) {
@@ -100,6 +103,7 @@ func loadTenantByIdentifier(ctx context.Context, db *sqlx.DB, identifier string)
 
 	var tenant Tenant
 	if err := db.GetContext(ctx, &tenant, q, args...); err != nil {
+		slog.Warn("loadTenantByIdentifier query error", "identifier", identifier, "error", err, "error_type", fmt.Sprintf("%T", err), "is_no_rows", errors.Is(err, sql.ErrNoRows))
 		if errors.Is(err, sql.ErrNoRows) {
 			return Tenant{}, ErrTenantNotFound
 		}

@@ -51,14 +51,28 @@ export async function apiFetch<T>(
   const response = await fetch(buildUrl(path, options?.params), {
     method: options?.method ?? 'GET',
     headers: {
-      'Content-Type': 'application/json'
+      'Content-Type': 'application/json',
+      'X-Tenant-ID': 'DEFAULT'
     },
     body: options?.body ? JSON.stringify(options.body) : undefined,
     signal: options?.signal
   });
 
   const text = await response.text();
-  const payload = text ? (JSON.parse(text) as unknown) : undefined;
+
+  let payload: unknown;
+  if (text) {
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      // Response is not valid JSON (e.g. proxy error page, HTML error, etc.)
+      throw new ApiError(
+        `Server returned non-JSON response (HTTP ${response.status})`,
+        response.status,
+        { message: text.slice(0, 200), code: 'NON_JSON_RESPONSE' }
+      );
+    }
+  }
 
   if (!response.ok) {
     const errorPayload = (payload as ApiErrorPayload | undefined) ?? undefined;

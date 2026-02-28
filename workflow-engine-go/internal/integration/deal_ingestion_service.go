@@ -873,6 +873,14 @@ func (s *dealIngestionService) createDocumentVerificationCase(
 		}
 	}
 
+	// Auto-generate case tags derived from the deal structure.
+	tags := deriveTagsFromDeal(deal, priority)
+	for _, tag := range tags {
+		if err := s.insertCaseTag(ctx, tx, tenantID, caseID, tag.code, tag.value, now); err != nil {
+			s.logger.Warn("failed to insert auto-tag", "tag", tag.code, "case_id", caseID, "error", err)
+		}
+	}
+
 	return caseID, nil
 }
 
@@ -1011,6 +1019,112 @@ func (s *dealIngestionService) insertGeneratedTask(
 	`, tenantID, caseID, task.TaskType, documentVerificationActivity, documentVerificationStageCode, string(model.TaskStatusPending), int(taskPriority), inputPayload, metadata, idempotencyKey)
 	if err != nil {
 		return fmt.Errorf("insert generated task %s: %w", task.TaskType, err)
+	}
+	return nil
+}
+
+// derivedTag holds a tag code and optional value to be auto-inserted on a new case.
+type derivedTag struct {
+	code  string
+	value *string
+}
+
+func strPtr(s string) *string { return &s }
+
+// deriveTagsFromDeal produces a set of tags based on deal characteristics.
+func deriveTagsFromDeal(deal BusinessLendingDeal, priority string) []derivedTag {
+	var tags []derivedTag
+
+	// 1. Complexity based on umbrella limit amount.
+	amount := deal.UmbrellaLimit.ApprovedLimit.Amount
+	switch {
+	case amount < 500_000:
+		tags = append(tags, derivedTag{code: "SIMPLE"})
+	case amount < 2_000_000:
+		tags = append(tags, derivedTag{code: "STANDARD_1"})
+	case amount < 5_000_000:
+		tags = append(tags, derivedTag{code: "STANDARD_2"})
+	case amount < 10_000_000:
+		tags = append(tags, derivedTag{code: "STANDARD_3"})
+	default:
+		tags = append(tags, derivedTag{code: "NON_STANDARD"})
+	}
+
+	// 2. VIP / HIGH_NET_WORTH for large deals.
+	if amount >= 5_000_000 {
+		tags = append(tags, derivedTag{code: "HIGH_NET_WORTH"})
+	}
+	if priority == "URGENT" {
+		tags = append(tags, derivedTag{code: "VIP"})
+	}
+
+	// 3. Skill tags based on products present in the deal.
+	productSet := make(map[string]bool)
+	for _, be := range deal.BorrowingEntities {
+		for _, fac := range be.Facilities {
+			productSet[strings.ToUpper(fac.Product)] = true
+		}
+	}
+	// Always need credit analyst
+	tags = append(tags, derivedTag{code: "CREDIT_ANALYST"})
+
+	if productSet["COMMERCIAL_PROPERTY_FINANCE"] || productSet["COMMERCIAL_BILL"] {
+		tags = append(tags, derivedTag{code: "SENIOR_UNDERWRITER"})
+	}
+	if productSet["EQUIPMENT_FINANCE"] {
+		tags = append(tags, derivedTag{code: "VALUATION_EXPERT"})
+	}
+
+	// 4. Trust structures require legal review.
+	if len(deal.TrustStructures) > 0 {
+		tags = append(tags, derivedTag{code: "LEGAL_REVIEWER"})
+	}
+
+	// 5. Multiple borrowing entities → complex structure.
+	if len(deal.BorrowingEntities) > 1 {
+		tags = append(tags, derivedTag{code: "COMPLEX_STRUCTURE", value: strPtr(fmt.Sprintf("%d borrowing entities", len(deal.BorrowingEntities)))})
+	}
+
+	// 6. Guarantees → compliance officer.
+	hasGuarantees := false
+	for _, be := range deal.BorrowingEntities {
+		for _, fac := range be.Facilities {
+			if len(fac.Guarantees) > 0 {
+				hasGuarantees = true
+				break
+			}
+		}
+	}
+	if hasGuarantees {
+		tags = append(tags, derivedTag{code: "COMPLIANCE_OFFICER"})
+	}
+
+	// 7. KYC analyst for multiple parties.
+	if len(deal.LegalParties) > 1 {
+		tags = append(tags, derivedTag{code: "KYC_ANALYST"})
+	}
+
+	return tags
+}
+
+// insertCaseTag inserts a single case tag, ignoring conflicts for idempotency.
+func (s *dealIngestionService) insertCaseTag(
+	ctx context.Context,
+	tx *sqlx.Tx,
+	tenantID, caseID, tagCode string,
+	tagValue *string,
+	now time.Time,
+) error {
+	// Use a deterministic tagged_by UUID for the ingestion service.
+	const serviceActorUUID = "00000000-0000-0000-0000-000000000001"
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO case_tags (tenant_id, case_id, tag_code, tag_value, tagged_by, tagged_at)
+		VALUES ($1::uuid, $2::uuid, $3, $4, $5::uuid, $6)
+		ON CONFLICT (tenant_id, case_id, tag_code) WHERE removed_at IS NULL
+		DO UPDATE SET tag_value = EXCLUDED.tag_value
+	`, tenantID, caseID, tagCode, tagValue, serviceActorUUID, now)
+	if err != nil {
+		return fmt.Errorf("insert case tag %s: %w", tagCode, err)
 	}
 	return nil
 }

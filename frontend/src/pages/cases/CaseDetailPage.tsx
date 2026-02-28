@@ -168,7 +168,7 @@ export default function CaseDetailPage() {
       {tab === 'documents' ? <DocumentsTab caseId={caseId} /> : null}
       {tab === 'approvals' ? <ApprovalsTab caseId={caseId} /> : null}
       {tab === 'timeline' ? <TimelineTab caseId={caseId} /> : null}
-      {tab === 'deal360' ? <Deal360Tab dealPayload={caseDetail.metadata as any} /> : null}
+      {tab === 'deal360' ? <Deal360Tab dealPayload={caseDetail.dealSnapshot ?? (caseDetail.metadata as any)} /> : null}
       {tab === 'communications' ? <CommunicationsTab caseId={caseId} /> : null}
 
       <TaskWorkbenchModal

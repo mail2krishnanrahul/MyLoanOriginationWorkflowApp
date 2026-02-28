@@ -137,6 +137,23 @@ func (r *Repository) GetSubCases(ctx context.Context, parentCaseID string) ([]Ca
 	return subs, rows.Err()
 }
 
+// GetDealSnapshot fetches the latest deal snapshot from case_deal_links for a case.
+// Returns nil if no deal link exists (e.g., non-ingested cases).
+func (r *Repository) GetDealSnapshot(ctx context.Context, caseID string) (json.RawMessage, error) {
+	var snapshot json.RawMessage
+	err := r.Pool.QueryRow(ctx, `
+		SELECT deal_snapshot
+		FROM case_deal_links
+		WHERE case_id = $1::uuid
+		ORDER BY last_snapshot_refreshed_at DESC
+		LIMIT 1`, caseID,
+	).Scan(&snapshot)
+	if err != nil {
+		return nil, err // caller handles "no rows" gracefully
+	}
+	return snapshot, nil
+}
+
 // TaskStatusRow is one row from the aggregated task query.
 type TaskStatusRow struct {
 	ActivityCode       string

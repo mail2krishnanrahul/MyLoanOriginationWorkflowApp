@@ -1,15 +1,17 @@
 import { useState } from 'react';
 import { Tabs, type TabItem } from '@/components/navigation/Tabs';
 import { Users, Shield, Settings } from 'lucide-react';
+import { DealIngestionPanel } from './DealIngestionPanel';
 
 const tabs: TabItem[] = [
+    { key: 'ingestion', label: 'Deal Ingestion' },
     { key: 'users', label: 'User Management' },
     { key: 'teams', label: 'Team Management' },
     { key: 'settings', label: 'System Settings' }
 ];
 
 export default function AdminHubPage() {
-    const [activeTab, setActiveTab] = useState<string>('users');
+    const [activeTab, setActiveTab] = useState<string>('ingestion');
 
     return (
         <div className="space-y-6">
@@ -17,7 +19,7 @@ export default function AdminHubPage() {
                 <div>
                     <h1 className="text-2xl font-bold tracking-tight">Administrator Hub</h1>
                     <p className="text-sm text-neutral-500 dark:text-neutral-400">
-                        Manage users, configure teams, and adjust system settings.
+                        Manage users, configure teams, ingest deals, and adjust system settings.
                     </p>
                 </div>
             </div>
@@ -27,6 +29,8 @@ export default function AdminHubPage() {
             </div>
 
             <div className="mt-4">
+                {activeTab === 'ingestion' && <DealIngestionPanel />}
+
                 {activeTab === 'users' && (
                     <div className="rounded-xl border border-neutral-200 bg-white p-6 shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
                         <div className="mb-4 flex items-center justify-between">

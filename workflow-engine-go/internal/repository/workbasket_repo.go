@@ -100,12 +100,12 @@ func (r *Repository) ListWorkbasketTasks(ctx context.Context, workbasketID strin
 		SELECT
 			t.id::text         AS id,
 			COALESCE(t.task_definition_code, t.assigned_service, 'Task') AS task_name,
-			COALESCE(ci.reference_number, t.case_id::text)               AS case_reference,
+			COALESCE(c.reference_number, t.case_id::text)                AS case_reference,
 			t.priority,
 			t.due_at,
 			t.created_at       AS waiting_since
 		FROM tasks t
-		LEFT JOIN case_instances ci ON ci.id = t.case_id
+		LEFT JOIN cases c ON c.id = t.case_id
 		WHERE t.workbasket_id = $1::uuid
 		  AND t.status IN ('PENDING', 'IN_PROGRESS')
 		  AND t.assignee_id IS NULL

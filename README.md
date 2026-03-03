@@ -7,6 +7,7 @@ Production-grade Go-based workflow engine for loan origination case processing, 
 - **Deal Ingestion Engine**: Snapshot-driven delta detection and deterministic algorithmic task generation for Business Lending deals based on material changes (OpenAPI integrated). Auto-generates case tags derived from deal structure (complexity, skills, VIP status).
 - **Case List with Tags**: Card-based case list UI with color-coded tag chips (complexity, skill, VIP, document errors, exceptions), advanced filtering, SLA indicators, and pagination.
 - **Deal 360 View**: Full hierarchical visualisation of deal structure — borrowing entities, facilities, interest/payment schedules, collateral packages, and asset details — loaded from the ingested deal snapshot.
+- **GetNext Intelligent Work Distribution**: One-click case assignment engine that scores every allocatable case across 7 weighted factors (SLA risk, skill match, queue age, complexity, business value, affinity, workload) and atomically claims the highest-priority eligible case for the current operator. Includes real-time queue depth indicators, expandable top-3 preview panel, explainable score breakdowns, skip-reason capture, supervisor dashboard, and full Prometheus observability.
 - **Strict Multi-Tenancy**: Data isolation at the row level with a mandatory `tenant_id` context scope across all interactions, ensuring enterprise-grade compartmentalisation.
 - **Dynamic Task Orchestration**: Robust DAG-based engine orchestrating task lifecycles (Draft → Pending → In-Progress → Done/Failed).
 - **Approval & Decision Gates**: Evaluation core supporting complex arithmetic and logic conditionals. Native handling of consensus, majority, and tier-based approval chains.
@@ -78,10 +79,11 @@ Specialised roles for the `HOME_LOAN_DOC_VERIFICATION` case type:
 - `workflow-engine-go/`: main Go service, background workers, and entry points.
 - `workflow-engine-go/cmd/`: application bootstraps (api, worker, sweeper, dispatcher).
 - `workflow-engine-go/internal/`: business logic encompassing auth, approval, documents, integration, orchestration, routing, etc.
+- `workflow-engine-go/internal/getnext/`: GetNext intelligent work distribution engine (scoring CTE, claim/preview/skip functions, HTTP handler, Prometheus metrics, unit tests).
 - `workflow-engine-go/internal/docverification/`: document verification workflow engine (intake, classification, QA, allocation).
 - `workflow-engine-go/internal/integration/`: deal ingestion service with snapshot diffing and deterministic task/tag generation.
 - `workflow-engine-go/pkg/model/`: shared core models.
-- `workflow-engine-go/db/migrations/`: extensive SQL migration manifests (33 migrations).
+- `workflow-engine-go/db/migrations/`: extensive SQL migration manifests (35 migrations, including GetNext schema).
 - `workflow-engine-go/docs/`: OpenAPI specification and Swagger UI.
 - `k8s/`: comprehensive Kubernetes deployment manifests (Database, API, Frontend, Workers, Routing).
 - `scripts/`: utility scripts for seeding tenants, deals, and test data.
@@ -160,6 +162,83 @@ curl -X POST http://localhost:8080/api/ingest/deals \
   -H "X-Idempotency-Key: unique-key-here" \
   -d @IngestDealRequirements/SampleJSON.json
 ```
+
+## GetNext — Intelligent Work Distribution
+
+The **GetNext engine** eliminates manual queue-picking by scoring every `ALLOCATABLE` case in the queue and atomically assigning the highest-priority eligible case to the requesting operator.
+
+### Scoring Algorithm (7 factors)
+
+| Factor | Weight (default) | Range | Description |
+|---|---|---|---|
+| SLA Risk | 35% | 0–100 | Urgency based on time remaining to `case_due_at` |
+| Skill Match | 25% | 0–100 | Overlap between operator's `worker_skills` and case `required_skills` |
+| Queue Age | 10% | 0–50 | Hours the case has been in `ALLOCATABLE` status |
+| Complexity | 10% | 0–50 | Case complexity tier (`SIMPLE` → `NON_STANDARD`) |
+| Business Value | 10% | 0–50 | VIP borrower flag + loan amount bands |
+| Affinity | 5% | 0–30 | Whether the operator previously worked this case |
+| Workload Penalty | 5% | –50–0 | Penalises operators approaching their capacity limit |
+
+Weights are tenant-configurable via the `getnext_weights` table and loaded with a 5-minute cache.
+
+### API Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/v1/getnext/claim` | Claim the highest-scored eligible case |
+| `GET` | `/api/v1/getnext/preview` | Preview top-N cases without claiming (read-only) |
+| `POST` | `/api/v1/getnext/skip` | Record a skip with reason (FREE_TEXT, CONFLICT_OF_INTEREST, TOO_COMPLEX, WRONG_SKILL, OTHER) |
+| `GET` | `/api/v1/getnext/queue` | Live queue depth, SLA breach count, avg wait time |
+| `GET` | `/api/v1/getnext/supervisor` | Full supervisor dashboard (team workloads, stalled cases, priority ranking) |
+| `POST` | `/api/v1/getnext/refresh-affinity` | Admin: refresh `case_user_affinity` materialised view |
+| `POST` | `/api/v1/getnext/snapshot` | Admin: record a point-in-time queue snapshot |
+
+### Concurrency Safety
+
+Claiming uses `SELECT … FOR UPDATE SKIP LOCKED` inside a transaction, followed by an `UPDATE cases WHERE assigned_user_id IS NULL` optimistic lock. If two operators race for the same case, exactly one wins — the other receives an `ErrCaseAlreadyClaimed` and can retry.
+
+### Prometheus Metrics
+
+| Metric | Type | Description |
+|---|---|---|
+| `workflow_getnext_claims_total` | Counter | Successful claim operations |
+| `workflow_getnext_skips_total` | Counter | Skip operations (labelled by reason) |
+| `workflow_getnext_no_eligible_total` | Counter | Empty-queue call count |
+| `workflow_getnext_capacity_blocked_total` | Counter | Capacity-blocked call count |
+| `workflow_getnext_composite_score` | Histogram | Distribution of scores for claimed cases |
+| `workflow_getnext_duration_seconds` | Histogram | End-to-end API call latency |
+| `workflow_getnext_queue_depth` | Gauge | Live allocatable unassigned case count |
+| `workflow_getnext_queue_sla_breached` | Gauge | SLA-breached cases waiting in queue |
+
+### Frontend UI Components
+
+| Component | Location | Description |
+|---|---|---|
+| `GetNextButton` | Cases list page header | One-click claim with loading state and error feedback |
+| `QueueDepthIndicator` | Cases list page header | Live queue badge; pulses red on SLA breach |
+| `GetNextPreviewPanel` | Cases list page | Expandable top-3 scored case preview with per-case claim/skip |
+| `ScoreBreakdownTooltip` | Inside preview panel | Expandable 7-factor bar chart + Plain-English explanations |
+| `SkipReasonModal` | Inside preview panel | 5-reason radio group with optional notes |
+| `CapacityModal` | Triggered on capacity block | Visual gauge showing current vs max active cases |
+| `SupervisorQueuePanel` | Supervisor views | Team workloads, stalled cases, highest-priority case ranking |
+
+### Schema Changes (Migration 000035)
+
+```sql
+-- New status added to cases.status
+ALLOCATABLE
+
+-- New tables
+getnext_weights             -- per-tenant scoring configuration
+getnext_claims              -- append-only audit log
+case_allocation_transitions -- tracks queue entry/exit timestamps
+getnext_queue_snapshots     -- point-in-time analytics
+
+-- New materialised view
+case_user_affinity          -- pre-computed operator↔case affinity scores
+```
+
+Apply: `migrate -path workflow-engine-go/db/migrations -database $DATABASE_URL up`
 
 ## API Documentation
 

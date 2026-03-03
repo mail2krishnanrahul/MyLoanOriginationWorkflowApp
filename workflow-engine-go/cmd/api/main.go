@@ -12,6 +12,7 @@ import (
 
 	"workflow-engine/internal/database"
 	"workflow-engine/internal/engine"
+	"workflow-engine/internal/getnext"
 	"workflow-engine/internal/integration"
 	"workflow-engine/internal/multitenancy"
 	"workflow-engine/internal/notification"
@@ -107,6 +108,7 @@ func main() {
 	engine.RegisterCaseDetailHandler(apiMux, repo)
 	engine.RegisterAuditHandlers(apiMux, repo)
 	engine.RegisterWorkbasketHandlers(apiMux, repo)
+	getnext.RegisterGetNextHandlers(apiMux, pgxDB.Pool)
 	notification.RegisterNotificationHandlers(apiMux, db, slog.Default())
 	integration.RegisterDealIngestionHandlers(apiMux, db, slog.Default())
 

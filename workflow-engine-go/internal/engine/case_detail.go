@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"workflow-engine/internal/repository"
 	"workflow-engine/pkg/model"
@@ -68,6 +69,16 @@ func GetCaseDetail(
 				detail.LoanAmount = v
 			}
 		}
+	}
+
+	// Map classifier-set summary fields
+	detail.Complexity = header.Complexity
+	detail.IsVIP = header.IsVIP
+	detail.Channel = header.Channel
+	detail.Officer = header.OfficerName
+	if header.TargetCloseDate != nil {
+		s := header.TargetCloseDate.Format("2006-01-02")
+		detail.TargetCloseDate = &s
 	}
 
 	// 2. Stage history
@@ -199,6 +210,10 @@ func groupTasksByActivity(rows []repository.TaskStatusRow) []ActivitySummary {
 func RegisterCaseDetailHandler(mux *http.ServeMux, repo *repository.Repository) {
 	// GET /cases/{id}  — full case detail (fetched by UUID)
 	mux.HandleFunc("GET /cases/{id}", handleGetCaseDetail(repo))
+	// /cases/{id}/summary — method dispatch: PATCH = classifier step
+	// Using an unqualified pattern avoids Go mux pattern conflicts with
+	// the parent GET /cases/{id} route.
+	mux.HandleFunc("/cases/{id}/summary", handleCaseSummary(repo))
 	// GET /cases/{id}/tasks — tasks for the case (already embedded in detail,
 	// but the frontend requests this endpoint separately)
 	mux.HandleFunc("GET /cases/{id}/tasks", handleGetCaseTasks(repo))
@@ -229,6 +244,107 @@ func handleGetCaseDetail(repo *repository.Repository) http.HandlerFunc {
 			return
 		}
 
+		writeJSON(w, http.StatusOK, detail)
+	}
+}
+
+// handleCaseSummary dispatches /cases/{id}/summary by method.
+// Using a method-agnostic pattern on the mux avoids the Go 1.22 pattern
+// conflict where PATCH /cases/{id}/summary could be shadowed by GET /cases/{id}.
+func handleCaseSummary(repo *repository.Repository) http.HandlerFunc {
+	patch := handlePatchCaseSummary(repo)
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPatch:
+			patch(w, r)
+		case http.MethodOptions:
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.Header().Set("Allow", "PATCH, OPTIONS")
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{
+				"error": "method not allowed",
+			})
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// PATCH /cases/{id}/summary — classifier step
+// ---------------------------------------------------------------------------
+
+// complexitySLADays maps each complexity tier to its target calendar-day window.
+var complexitySLADays = map[string]int{
+	"SIMPLE":       10,
+	"STANDARD_1":   20,
+	"STANDARD_2":   30,
+	"COMPLEX":      45,
+	"NON_STANDARD": 60,
+}
+
+// patchSummaryRequest is the wire shape for PATCH /cases/{id}/summary.
+type patchSummaryRequest struct {
+	Complexity      *string  `json:"complexity"`
+	IsVIP           *bool    `json:"isVip"`
+	TargetCloseDate *string  `json:"targetCloseDate"` // YYYY-MM-DD, optional override
+	LoanAmount      *float64 `json:"loanAmount"`
+	ProductType     *string  `json:"productType"`
+	Channel         *string  `json:"channel"`
+	Officer         *string  `json:"officer"`
+	BorrowerName    *string  `json:"borrowerName"`
+}
+
+func handlePatchCaseSummary(repo *repository.Repository) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if id == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "case id required"})
+			return
+		}
+
+		var req patchSummaryRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+			return
+		}
+
+		// Build repo patch payload
+		patch := repository.PatchSummaryPayload{
+			Complexity:   req.Complexity,
+			IsVIP:        req.IsVIP,
+			LoanAmount:   req.LoanAmount,
+			ProductType:  req.ProductType,
+			Channel:      req.Channel,
+			OfficerName:  req.Officer,
+			BorrowerName: req.BorrowerName,
+		}
+
+		// Auto-compute targetCloseDate from complexity SLA when no explicit date given
+		if req.TargetCloseDate != nil && *req.TargetCloseDate != "" {
+			t, err := time.Parse("2006-01-02", *req.TargetCloseDate)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "targetCloseDate must be YYYY-MM-DD"})
+				return
+			}
+			patch.TargetCloseDate = &t
+		} else if req.Complexity != nil && *req.Complexity != "" {
+			if days, ok := complexitySLADays[*req.Complexity]; ok {
+				t := time.Now().UTC().AddDate(0, 0, days)
+				patch.TargetCloseDate = &t
+			}
+		}
+
+		if err := repo.UpdateCaseSummary(r.Context(), id, patch); err != nil {
+			slog.Error("PATCH /cases/{id}/summary failed", "error", err, "case_id", id)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to update case"})
+			return
+		}
+
+		// Return the refreshed case detail so the frontend can update in one round-trip
+		detail, err := GetCaseDetail(r.Context(), repo, id)
+		if err != nil {
+			writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+			return
+		}
 		writeJSON(w, http.StatusOK, detail)
 	}
 }

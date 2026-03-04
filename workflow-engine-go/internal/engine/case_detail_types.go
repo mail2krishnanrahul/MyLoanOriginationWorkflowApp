@@ -32,6 +32,13 @@ type CaseDetail struct {
 	ProductType  *string `json:"productType,omitempty"`
 	LoanAmount   float64 `json:"loanAmount,omitempty"`
 
+	// Classifier-set summary fields
+	Complexity      *string `json:"complexity,omitempty"`
+	IsVIP           bool    `json:"isVip"`
+	TargetCloseDate *string `json:"targetCloseDate,omitempty"`
+	Channel         *string `json:"channel,omitempty"`
+	Officer         *string `json:"officer,omitempty"`
+
 	// SLA
 	SLAStatus           string  `json:"slaStatus"`
 	SLARemainingMinutes float64 `json:"slaRemainingMinutes"`

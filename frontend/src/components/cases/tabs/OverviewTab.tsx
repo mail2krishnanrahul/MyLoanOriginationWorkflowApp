@@ -2,16 +2,16 @@ import { BellRing, FileUp, Gavel, PlayCircle } from 'lucide-react';
 import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { StatusBadge } from '@/components/domain/StatusBadge';
+import { CaseSummaryCard } from '@/components/cases/CaseSummaryCard';
 import type { CaseDetail } from '@/lib/api/types';
-import { formatCurrency } from '@/lib/utils/format';
-import { formatDate } from '@/lib/utils/date';
 
 interface OverviewTabProps {
   caseDetail: CaseDetail;
+  caseId: string;
   onOpenNextTask: () => void;
 }
 
-export function OverviewTab({ caseDetail, onOpenNextTask }: OverviewTabProps) {
+export function OverviewTab({ caseDetail, caseId, onOpenNextTask }: OverviewTabProps) {
   return (
     <div className="space-y-4">
       <div className="grid gap-4 xl:grid-cols-[1.4fr_1fr]">
@@ -22,45 +22,7 @@ export function OverviewTab({ caseDetail, onOpenNextTask }: OverviewTabProps) {
               <CardDescription>Core metadata and projected close path</CardDescription>
             </div>
           </CardHeader>
-          <div className="grid gap-3 text-sm md:grid-cols-2">
-            <div className="panel-muted p-3">
-              <p className="text-xs uppercase tracking-wide text-neutral-500 dark:text-neutral-300">Loan amount</p>
-              <p className="mt-1 text-base font-semibold text-neutral-900 dark:text-neutral-100">
-                {formatCurrency(caseDetail.loanAmount)}
-              </p>
-            </div>
-            <div className="panel-muted p-3">
-              <p className="text-xs uppercase tracking-wide text-neutral-500 dark:text-neutral-300">Product</p>
-              <p className="mt-1 text-base font-semibold text-neutral-900 dark:text-neutral-100">
-                {caseDetail.productType}
-              </p>
-            </div>
-            <div className="panel-muted p-3">
-              <p className="text-xs uppercase tracking-wide text-neutral-500 dark:text-neutral-300">Channel</p>
-              <p className="mt-1 text-base font-semibold text-neutral-900 dark:text-neutral-100">{caseDetail.channel}</p>
-            </div>
-            <div className="panel-muted p-3">
-              <p className="text-xs uppercase tracking-wide text-neutral-500 dark:text-neutral-300">Officer</p>
-              <p className="mt-1 text-base font-semibold text-neutral-900 dark:text-neutral-100">{caseDetail.officer}</p>
-            </div>
-          </div>
-
-          <div className="mt-4 rounded-xl border border-dashed border-neutral-300 p-4 dark:border-neutral-700">
-            <p className="text-xs uppercase tracking-wide text-neutral-500 dark:text-neutral-300">Mini timeline</p>
-            <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-neutral-600 dark:text-neutral-200">
-              <span className="rounded-full bg-neutral-100 px-2 py-1 dark:bg-neutral-800">
-                Created {formatDate(caseDetail.createdAt)}
-              </span>
-              <span className="text-neutral-400">&rarr;</span>
-              <span className="rounded-full bg-brand-50 px-2 py-1 text-brand-700 dark:bg-brand-500/15 dark:text-brand-200">
-                Current: {caseDetail.currentStage ?? caseDetail.stage ?? '--'}
-              </span>
-              <span className="text-neutral-400">&rarr;</span>
-              <span className="rounded-full bg-accent-50 px-2 py-1 text-accent-700 dark:bg-accent-500/15 dark:text-accent-200">
-                Target close {formatDate(caseDetail.targetCloseDate)}
-              </span>
-            </div>
-          </div>
+          <CaseSummaryCard caseDetail={caseDetail} caseId={caseId} />
         </Card>
 
         <Card>

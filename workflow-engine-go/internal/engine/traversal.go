@@ -121,7 +121,8 @@ func (e *Engine) CompleteComponent(ctx context.Context, tx repository.DBExecutor
 		return fmt.Errorf("failed to fetch parent: %w", err)
 	}
 
-	if parent.ExecutionStrategy == model.StrategySequential {
+	switch parent.ExecutionStrategy {
+	case model.StrategySequential:
 		// Find Next Sibling
 		nextSibling, err := e.Repo.GetNextSibling(ctx, tx, component.ID)
 		if err != nil {
@@ -141,7 +142,7 @@ func (e *Engine) CompleteComponent(ctx context.Context, tx repository.DBExecutor
 		}
 		return e.CompleteComponent(ctx, tx, parentInstanceID)
 
-	} else if parent.ExecutionStrategy == model.StrategyParallel {
+	case model.StrategyParallel:
 		// Check if ALL siblings are complete
 		allDone, err := e.Repo.AreAllChildrenComplete(ctx, tx, instance.CaseID, parent.ID)
 		if err != nil {

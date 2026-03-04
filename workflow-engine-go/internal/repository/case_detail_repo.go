@@ -26,6 +26,12 @@ type CaseHeader struct {
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 	CompletedAt     *time.Time
+	// Classifier-set summary fields (migration 000036)
+	Complexity      *string
+	IsVIP           bool
+	TargetCloseDate *time.Time
+	Channel         *string
+	OfficerName     *string
 }
 
 // GetCaseByReference fetches a case by its human-readable reference number,
@@ -35,7 +41,9 @@ func (r *Repository) GetCaseByReference(ctx context.Context, ref string) (*CaseH
 	err := r.Pool.QueryRow(ctx, `
 		SELECT c.id, c.reference_number, ct.code, c.case_type_version,
 		       c.status, c.current_stage_code, c.assigned_to,
-		       c.metadata, c.created_at, c.updated_at, c.completed_at
+		       c.metadata, c.created_at, c.updated_at, c.completed_at,
+		       c.case_complexity::TEXT, c.is_vip, c.target_close_date,
+		       c.channel, c.officer_name
 		FROM cases c
 		JOIN case_types ct ON ct.id = c.case_type_id
 		WHERE c.reference_number = $1`, ref,
@@ -43,6 +51,8 @@ func (r *Repository) GetCaseByReference(ctx context.Context, ref string) (*CaseH
 		&h.CaseID, &h.ReferenceNumber, &h.CaseTypeCode, &h.CaseTypeVersion,
 		&h.Status, &h.CurrentStage, &h.AssignedTo,
 		&h.Metadata, &h.CreatedAt, &h.UpdatedAt, &h.CompletedAt,
+		&h.Complexity, &h.IsVIP, &h.TargetCloseDate,
+		&h.Channel, &h.OfficerName,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("case %s not found: %w", ref, err)
@@ -57,7 +67,9 @@ func (r *Repository) GetCaseByID(ctx context.Context, id string) (*CaseHeader, e
 	err := r.Pool.QueryRow(ctx, `
 		SELECT c.id, c.reference_number, ct.code, c.case_type_version,
 		       c.status, c.current_stage_code, c.assigned_to,
-		       c.metadata, c.created_at, c.updated_at, c.completed_at
+		       c.metadata, c.created_at, c.updated_at, c.completed_at,
+		       c.case_complexity::TEXT, c.is_vip, c.target_close_date,
+		       c.channel, c.officer_name
 		FROM cases c
 		JOIN case_types ct ON ct.id = c.case_type_id
 		WHERE c.id = $1::uuid`, id,
@@ -65,6 +77,8 @@ func (r *Repository) GetCaseByID(ctx context.Context, id string) (*CaseHeader, e
 		&h.CaseID, &h.ReferenceNumber, &h.CaseTypeCode, &h.CaseTypeVersion,
 		&h.Status, &h.CurrentStage, &h.AssignedTo,
 		&h.Metadata, &h.CreatedAt, &h.UpdatedAt, &h.CompletedAt,
+		&h.Complexity, &h.IsVIP, &h.TargetCloseDate,
+		&h.Channel, &h.OfficerName,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("case %s not found: %w", id, err)
@@ -225,4 +239,106 @@ func (r *Repository) GetOverallTaskProgress(ctx context.Context, caseID string) 
 		return TaskProgressRow{}, fmt.Errorf("failed to count task progress: %w", err)
 	}
 	return p, nil
+}
+
+// ---------------------------------------------------------------------------
+// Case Summary Patch (classifier step)
+// ---------------------------------------------------------------------------
+
+// PatchSummaryPayload carries the fields settable via PATCH /cases/{id}/summary.
+// Only non-nil pointer fields are applied.
+type PatchSummaryPayload struct {
+	Complexity      *string
+	IsVIP           *bool
+	TargetCloseDate *time.Time
+	LoanAmount      *float64
+	ProductType     *string
+	Channel         *string
+	OfficerName     *string
+	BorrowerName    *string
+}
+
+// UpdateCaseSummary applies a partial update to the case's classifier-set fields.
+// Only the fields present in payload are updated (nil = no change).
+// It also merges loanAmount, productType, borrowerName into the metadata JSON.
+func (r *Repository) UpdateCaseSummary(ctx context.Context, caseID string, p PatchSummaryPayload) error {
+	// Build SET clause dynamically
+	setClauses := []string{"updated_at = NOW()"}
+	args := []interface{}{}
+	argN := 1
+
+	addArg := func(clause string, v interface{}) {
+		setClauses = append(setClauses, fmt.Sprintf(clause, argN))
+		args = append(args, v)
+		argN++
+	}
+
+	if p.Complexity != nil {
+		if *p.Complexity == "" {
+			addArg("case_complexity = NULL", nil) // clear
+		} else {
+			addArg("case_complexity = $%d::case_complexity", *p.Complexity)
+		}
+	}
+	if p.IsVIP != nil {
+		addArg("is_vip = $%d", *p.IsVIP)
+	}
+	if p.TargetCloseDate != nil {
+		addArg("target_close_date = $%d", *p.TargetCloseDate)
+	}
+	if p.Channel != nil {
+		addArg("channel = $%d", *p.Channel)
+	}
+	if p.OfficerName != nil {
+		addArg("officer_name = $%d", *p.OfficerName)
+	}
+
+	// Merge metadata fields (loanAmount, productType, borrowerName) via jsonb concatenation
+	if p.LoanAmount != nil || p.ProductType != nil || p.BorrowerName != nil {
+		metaPatch := map[string]interface{}{}
+		if p.LoanAmount != nil {
+			metaPatch["loanAmount"] = *p.LoanAmount
+		}
+		if p.ProductType != nil {
+			metaPatch["productType"] = *p.ProductType
+		}
+		if p.BorrowerName != nil {
+			metaPatch["borrowerName"] = *p.BorrowerName
+		}
+		metaJSON, err := json.Marshal(metaPatch)
+		if err != nil {
+			return fmt.Errorf("marshal metadata patch: %w", err)
+		}
+		addArg("metadata = metadata || $%d::jsonb", metaJSON)
+	}
+
+	if len(setClauses) == 1 {
+		return nil // nothing to update
+	}
+
+	// Append WHERE clause arg
+	args = append(args, caseID)
+	sql := fmt.Sprintf(
+		`UPDATE cases SET %s WHERE id = $%d::uuid`,
+		joinClauses(setClauses),
+		argN,
+	)
+
+	_, err := r.Pool.Exec(ctx, sql, args...)
+	if err != nil {
+		return fmt.Errorf("UpdateCaseSummary: %w", err)
+	}
+	return nil
+}
+
+// joinClauses joins SET clause fragments with commas.
+func joinClauses(clauses []string) string {
+	result := ""
+	for i, c := range clauses {
+		if i > 0 {
+			result += ", "
+		}
+		result += c
+	}
+	return result
 }

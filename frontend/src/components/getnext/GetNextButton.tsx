@@ -1,4 +1,3 @@
-import React from 'react';
 import { Loader2, Zap, AlertCircle } from 'lucide-react';
 import { useClaimNextCase } from '@/hooks/useGetNext';
 import type { GetNextResult } from '@/types/getnext';

@@ -36,7 +36,7 @@ export function Sidebar() {
         'border-r border-white/5',
         collapsed ? 'w-[72px]' : 'w-60'
       )}
-      style={{ background: 'linear-gradient(180deg, #0d1422 0%, #0a1120 100%)' }}
+      style={{ background: 'linear-gradient(180deg, var(--sidebar-grad-from) 0%, var(--sidebar-grad-to) 100%)' }}
     >
       {/* Brand */}
       <div className={cn('mb-8 flex items-center gap-3 px-4', collapsed && 'justify-center px-2')}>

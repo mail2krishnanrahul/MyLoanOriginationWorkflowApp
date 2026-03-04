@@ -19,6 +19,7 @@ Production-grade Go-based workflow engine for loan origination case processing, 
 - **Document Verification Workflow**: Complete workflow for HOME_LOAN_DOC_VERIFICATION cases — intake, classification, QA review, allocation, checklists, error tags, and additional info requests.
 - **Exception Sagas**: Automated exception handling, leveraging Saga Compensations and Retries for failure state recovery without manual intervention.
 - **Admin Hub**: Admin panel with deal ingestion interface (editable JSON payload, one-click case creation), user management, and team configuration.
+- **Custom Theme Switcher**: Six selectable UI themes (Light, Dark, Ocean Breeze, Sunset Ember, Forest Canopy, Arctic Frost) accessible from a topbar dropdown. Themes override CSS variables for backgrounds, panels, borders, sidebar gradients, and body gradients while preserving Tailwind dark-mode compatibility.
 
 ## Roles & Permissions
 

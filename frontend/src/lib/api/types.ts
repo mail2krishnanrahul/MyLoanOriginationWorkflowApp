@@ -1,6 +1,30 @@
 export type Priority = 'CRITICAL' | 'HIGH' | 'NORMAL' | 'LOW';
 export type SlaState = 'ON_TRACK' | 'WARNING' | 'BREACHED';
 
+export type CaseComplexity =
+  | 'SIMPLE'
+  | 'STANDARD_1'
+  | 'STANDARD_2'
+  | 'COMPLEX'
+  | 'NON_STANDARD';
+
+export const COMPLEXITY_LABELS: Record<CaseComplexity, string> = {
+  SIMPLE: 'Simple',
+  STANDARD_1: 'Standard 1',
+  STANDARD_2: 'Standard 2',
+  COMPLEX: 'Complex',
+  NON_STANDARD: 'Non-Standard',
+};
+
+/** Default target-close window in calendar days, matching backend complexitySLADays. */
+export const COMPLEXITY_SLA_DAYS: Record<CaseComplexity, number> = {
+  SIMPLE: 10,
+  STANDARD_1: 20,
+  STANDARD_2: 30,
+  COMPLEX: 45,
+  NON_STANDARD: 60,
+};
+
 export type CaseStatus =
   | 'OPEN'
   | 'DRAFT'
@@ -70,6 +94,12 @@ export interface CaseDetail {
   priority?: Priority | null;
   productType?: string | null;
   loanAmount?: number;
+  // Classifier-set summary fields
+  complexity?: CaseComplexity | null;
+  isVip?: boolean;
+  targetCloseDate?: string | null;
+  channel?: string | null;
+  officer?: string | null;
   // SLA
   slaStatus: SlaState;
   slaRemainingMinutes: number;
@@ -84,14 +114,23 @@ export interface CaseDetail {
   // Legacy/extra fields (may be absent)
   stage?: string;
   stageDescription?: string;
-  targetCloseDate?: string;
-  channel?: string;
-  officer?: string;
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
   metadata?: Record<string, unknown>;
   dealSnapshot?: DealPayload;
+}
+
+/** Payload for PATCH /api/cases/:id/summary */
+export interface UpdateCaseSummaryPayload {
+  complexity?: CaseComplexity | null;
+  isVip?: boolean;
+  targetCloseDate?: string | null; // YYYY-MM-DD
+  loanAmount?: number;
+  productType?: string;
+  channel?: string;
+  officer?: string;
+  borrowerName?: string;
 }
 
 export interface StageHistoryEntry {

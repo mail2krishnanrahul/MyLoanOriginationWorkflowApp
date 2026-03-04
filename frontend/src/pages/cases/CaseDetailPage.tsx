@@ -154,6 +154,7 @@ export default function CaseDetailPage() {
         <div id="overview-panel" role="tabpanel" aria-labelledby="overview-tab">
           <OverviewTab
             caseDetail={caseDetail}
+            caseId={caseId}
             onOpenNextTask={() => {
               if (!nextTaskId) {
                 toast.info('No remaining tasks');

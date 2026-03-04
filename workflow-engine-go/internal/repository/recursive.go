@@ -122,17 +122,18 @@ func (r *Repository) UpdateComponentInstanceStatus(ctx context.Context, executor
 	// Re-checking 005... it has started_at, completed_at, created_at.
 	// Let's set completed_at if status is COMPLETED
 
-	if status == "COMPLETED" {
+	switch status {
+	case "COMPLETED":
 		query = `
 			UPDATE component_instances
 			SET status = $1, completed_at = NOW()
 			WHERE id = $2::uuid`
-	} else if status == "IN_PROGRESS" {
+	case "IN_PROGRESS":
 		query = `
 			UPDATE component_instances
 			SET status = $1, started_at = NOW()
 			WHERE id = $2::uuid`
-	} else {
+	default:
 		query = `UPDATE component_instances SET status = $1 WHERE id = $2::uuid`
 	}
 

@@ -228,14 +228,15 @@ func (r *Repository) UpdateCaseStatus(
 		updates["metadata"] = metadata
 	}
 
-	if status == model.CaseStatusSuspended {
+	switch status {
+	case model.CaseStatusSuspended:
 		updates["suspend_reason"] = reason
 		// Clear resume_at? Or set it?
 		// User requirement 2: "optional resume_at timestamp".
 		// This signature doesn't pass resumeAt.
 		// So we can't set it here unless we change signature or rely on caller to use specific method.
 		// I will use UpdateCaseLifecycle for everything advanced. This function handles basic status changes + reason.
-	} else if status == model.CaseStatusCancelled {
+	case model.CaseStatusCancelled:
 		updates["withdrawal_reason"] = reason
 	}
 
@@ -245,16 +246,16 @@ func (r *Repository) UpdateCaseStatus(
 // allowedCaseColumns is the allowlist of column names that can be set via
 // UpdateCaseLifecycle. This prevents SQL injection through map keys.
 var allowedCaseColumns = map[string]bool{
-	"suspend_reason":     true,
-	"resume_at":          true,
-	"withdrawal_reason":  true,
-	"emergency_reason":   true,
-	"emergency_closed_at": true,
-	"supervisor_id":      true,
-	"completed_at":       true,
-	"metadata":           true,
-	"assigned_to":        true,
-	"current_stage_code": true,
+	"suspend_reason":        true,
+	"resume_at":             true,
+	"withdrawal_reason":     true,
+	"emergency_reason":      true,
+	"emergency_closed_at":   true,
+	"supervisor_id":         true,
+	"completed_at":          true,
+	"metadata":              true,
+	"assigned_to":           true,
+	"current_stage_code":    true,
 	"current_stage_ordinal": true,
 }
 

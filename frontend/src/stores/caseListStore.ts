@@ -23,7 +23,7 @@ const initialFilters: CaseListFilters = {
     priorities: [],
     complexities: [],
     skillCodes: [],
-    assignedToMe: false,
+    assignedToMe: true,
     hasBlockingErrors: false,
     isVip: false,
     slaDueBefore: null,

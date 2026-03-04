@@ -265,9 +265,9 @@ scored AS (
         CASE
             WHEN c.required_skills = '{}' OR c.required_skills IS NULL THEN 100.0
             WHEN c.required_skills <@ ud.skill_codes                    THEN 100.0
-            WHEN (SELECT COUNT(*) FROM unnest(c.required_skills) s WHERE s = ANY(ud.skill_codes))::float
+            WHEN (SELECT COUNT(*) FROM unnest(c.required_skills) AS s(skill) WHERE s.skill = ANY(ud.skill_codes))::float
                  / NULLIF(cardinality(c.required_skills), 0) > 0.5      THEN  75.0
-            WHEN (SELECT COUNT(*) FROM unnest(c.required_skills) s WHERE s = ANY(ud.skill_codes)) >= 1   THEN  40.0
+            WHEN (SELECT COUNT(*) FROM unnest(c.required_skills) AS s(skill) WHERE s.skill = ANY(ud.skill_codes)) >= 1   THEN  40.0
             ELSE 0.0
         END AS skill_raw,
         -- ── Age Score (0–50) ─────────────────────────────────────────────────

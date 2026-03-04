@@ -51,10 +51,10 @@ export function Sidebar() {
         </div>
         {!collapsed && (
           <div className="min-w-0">
-            <p className="text-[10px] font-bold uppercase tracking-widest text-sky-400/80">
+            <p className="text-[10px] font-bold uppercase tracking-widest" style={{ color: `rgb(var(--sidebar-accent))` }}>
               LoanFlow
             </p>
-            <p className="truncate text-sm font-semibold text-slate-100">
+            <p className="truncate text-sm font-semibold" style={{ color: `rgb(var(--sidebar-fg))` }}>
               Origination Hub
             </p>
           </div>
@@ -72,10 +72,15 @@ export function Sidebar() {
                 'group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-150',
                 collapsed && 'justify-center px-0',
                 isActive
-                  ? 'bg-white/10 text-white'
-                  : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'
+                  ? 'bg-white/10'
+                  : 'hover:bg-white/5'
               )
             }
+            style={({ isActive }) => ({
+              color: isActive
+                ? `rgb(var(--sidebar-fg))`
+                : `rgb(var(--sidebar-fg) / 0.55)`,
+            })}
           >
             {({ isActive }) => (
               <>
@@ -83,7 +88,7 @@ export function Sidebar() {
                 {isActive && (
                   <span
                     className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full"
-                    style={{ background: 'linear-gradient(180deg, #38bdf8 0%, #818cf8 100%)' }}
+                    style={{ background: 'linear-gradient(180deg, var(--sidebar-active-from) 0%, var(--sidebar-active-to) 100%)' }}
                   />
                 )}
                 <item.icon
@@ -97,7 +102,13 @@ export function Sidebar() {
                   <>
                     <span className="min-w-0 flex-1 truncate">{item.label}</span>
                     {item.badge && (
-                      <span className="rounded-md bg-sky-400/15 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-sky-300">
+                      <span
+                        className="rounded-md px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide"
+                        style={{
+                          backgroundColor: `rgb(var(--sidebar-accent) / 0.15)`,
+                          color: `rgb(var(--sidebar-accent))`,
+                        }}
+                      >
                         {item.badge}
                       </span>
                     )}
@@ -118,7 +129,8 @@ export function Sidebar() {
           type="button"
           onClick={toggleSidebar}
           aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-slate-500 transition hover:bg-white/5 hover:text-slate-300"
+          className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition hover:bg-white/5"
+          style={{ color: `rgb(var(--sidebar-fg) / 0.45)` }}
         >
           {collapsed ? (
             <ChevronsRight className="size-4" />

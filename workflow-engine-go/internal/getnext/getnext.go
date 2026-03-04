@@ -202,7 +202,7 @@ func buildGetNextQuery(userID, tenantID string, weights GetNextWeights, maxCases
 WITH
 user_data AS (
     SELECT u.user_id, u.tenant_id,
-           COALESCE(array_agg(ws.skill_code) FILTER (WHERE ws.skill_code IS NOT NULL), '{}') AS skill_codes
+           COALESCE(array_agg(ws.skill_code::text) FILTER (WHERE ws.skill_code IS NOT NULL), '{}') AS skill_codes
     FROM users u
     LEFT JOIN workers wk ON wk.id = u.id
     LEFT JOIN worker_skills ws ON ws.worker_id = wk.id
@@ -237,7 +237,6 @@ queue_depth AS (
     WHERE c.tenant_id = $2::uuid
       AND c.status = 'ALLOCATABLE'
       AND c.assigned_user_id IS NULL
-      AND c.current_stage_code = 'ALLOCATION'
       AND (c.required_skills = '{}' OR c.required_skills IS NULL
            OR c.required_skills && ud.skill_codes)
 ),
@@ -266,9 +265,9 @@ scored AS (
         CASE
             WHEN c.required_skills = '{}' OR c.required_skills IS NULL THEN 100.0
             WHEN c.required_skills <@ ud.skill_codes                    THEN 100.0
-            WHEN cardinality(c.required_skills & ud.skill_codes)::float
+            WHEN (SELECT COUNT(*) FROM unnest(c.required_skills) s WHERE s = ANY(ud.skill_codes))::float
                  / NULLIF(cardinality(c.required_skills), 0) > 0.5      THEN  75.0
-            WHEN cardinality(c.required_skills & ud.skill_codes) >= 1   THEN  40.0
+            WHEN (SELECT COUNT(*) FROM unnest(c.required_skills) s WHERE s = ANY(ud.skill_codes)) >= 1   THEN  40.0
             ELSE 0.0
         END AS skill_raw,
         -- ── Age Score (0–50) ─────────────────────────────────────────────────
@@ -310,7 +309,6 @@ scored AS (
     WHERE c.tenant_id = $2::uuid
       AND c.status = 'ALLOCATABLE'
       AND c.assigned_user_id IS NULL
-      AND c.current_stage_code = 'ALLOCATION'
       -- Skill filter: user must overlap at least 1 required skill,
       -- OR case has no required skills (open to all)
       AND (
@@ -910,7 +908,7 @@ func GetQueueDepth(ctx context.Context, pool *pgxpool.Pool, tenantID, caseTypeCo
 				  AND c.assigned_user_id IS NULL
 				  AND (c.required_skills = '{}' OR c.required_skills IS NULL
 				       OR c.required_skills && (
-				           SELECT COALESCE(array_agg(ws.skill_code),'{}')
+				           SELECT COALESCE(array_agg(ws.skill_code::text),'{}')
 				           FROM worker_skills ws WHERE ws.worker_id = wk.id
 				       ))`, tenantID, userID).Scan(&info.EligibleForUser)
 		}

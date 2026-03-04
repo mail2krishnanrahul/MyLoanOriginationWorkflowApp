@@ -109,8 +109,9 @@ export async function listCases(
     pageSize: number,
     signal?: AbortSignal,
 ): Promise<CaseListResponse> {
+    const scope = filters.assignedToMe ? 'my' : filters.teamId === 'current' ? 'team' : 'all';
     const params: Record<string, unknown> = {
-        scope: filters.assignedToMe ? 'my' : 'all',
+        scope,
         query: filters.search || undefined,
         status: filters.statuses.length ? filters.statuses.join(',') : undefined,
         priority: filters.priorities.length ? filters.priorities.join(',') : undefined,

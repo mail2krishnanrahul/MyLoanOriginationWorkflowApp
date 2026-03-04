@@ -64,6 +64,10 @@ func TenantMiddleware(db *sqlx.DB, next http.Handler) http.Handler {
 		switch tenant.Status {
 		case TenantStatusActive:
 			ctx := WithTenant(r.Context(), tenant.TenantID)
+			// Inject user identity from header into context for downstream handlers.
+			if userID := strings.TrimSpace(r.Header.Get("X-User-ID")); userID != "" {
+				ctx = context.WithValue(ctx, "actor_user_id", userID)
+			}
 			slog.Debug("tenant middleware accepted request", "tenant_id", tenant.TenantID, "tenant_code", tenant.TenantCode, "path", path)
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return

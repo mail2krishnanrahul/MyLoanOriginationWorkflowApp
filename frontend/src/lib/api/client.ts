@@ -52,7 +52,8 @@ export async function apiFetch<T>(
     method: options?.method ?? 'GET',
     headers: {
       'Content-Type': 'application/json',
-      'X-Tenant-ID': 'DEFAULT'
+      'X-Tenant-ID': 'DEFAULT',
+      'X-User-ID': '11111111-1111-1111-1111-111111111111'
     },
     body: options?.body ? JSON.stringify(options.body) : undefined,
     signal: options?.signal

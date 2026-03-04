@@ -42,8 +42,8 @@ export default function CaseListPage() {
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full">
       <div className="mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 tracking-tight">Cases</h1>
-          <p className="mt-2 text-sm text-gray-500">
+          <h1 className="text-3xl font-bold tracking-tight" style={{ color: 'rgb(var(--fg))' }}>Cases</h1>
+          <p className="mt-2 text-sm" style={{ color: 'rgb(var(--fg-muted))' }}>
             Manage and track all loan origination cases across the system.
           </p>
         </div>

@@ -48,10 +48,10 @@ func writeErr(w http.ResponseWriter, status int, msg string) {
 }
 
 func tenantFromCtx(r *http.Request) string {
-	// The multitenancy middleware injects X-Tenant-ID into context.
-	// We call the same helper used by other handlers.
-	if v := r.Header.Get("X-Tenant-ID"); v != "" {
-		return v
+	// Read the resolved tenant UUID from context (set by TenantMiddleware).
+	tid, err := multitenancy.TenantFromContext(r.Context())
+	if err == nil && tid != "" {
+		return tid
 	}
 	return "00000000-0000-0000-0000-000000000000"
 }

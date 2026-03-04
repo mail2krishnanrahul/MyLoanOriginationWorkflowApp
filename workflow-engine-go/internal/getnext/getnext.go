@@ -853,12 +853,12 @@ func GetQueueDepth(ctx context.Context, pool *pgxpool.Pool, tenantID, caseTypeCo
 	// Global stats
 	query := `
 		SELECT
-		    COUNT(*)::int                                              AS total,
-		    AVG(EXTRACT(EPOCH FROM (NOW() - cat.entered_at))/3600)    AS avg_wait,
-		    MAX(EXTRACT(EPOCH FROM (NOW() - cat.entered_at))/3600)    AS max_wait,
-		    COUNT(*) FILTER (WHERE c.case_due_at < NOW())::int        AS sla_breached,
+		    COUNT(*)::int                                                          AS total,
+		    COALESCE(AVG(EXTRACT(EPOCH FROM (NOW() - cat.entered_at))/3600), 0)    AS avg_wait,
+		    COALESCE(MAX(EXTRACT(EPOCH FROM (NOW() - cat.entered_at))/3600), 0)    AS max_wait,
+		    COUNT(*) FILTER (WHERE c.case_due_at < NOW())::int                     AS sla_breached,
 		    COUNT(*) FILTER (WHERE c.case_due_at >= NOW()
-		                     AND c.case_due_at < NOW() + INTERVAL '4 hours')::int AS sla_at_risk
+		                     AND c.case_due_at < NOW() + INTERVAL '4 hours')::int  AS sla_at_risk
 		FROM cases c
 		LEFT JOIN case_allocation_transitions cat ON cat.case_id = c.id AND cat.is_current = TRUE
 		WHERE c.tenant_id = $1::uuid

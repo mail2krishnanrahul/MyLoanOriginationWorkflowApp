@@ -1,4 +1,3 @@
-import React from 'react';
 import { Clock, AlertTriangle, TrendingDown, Users } from 'lucide-react';
 import { useQueueDepth } from '@/hooks/useGetNext';
 

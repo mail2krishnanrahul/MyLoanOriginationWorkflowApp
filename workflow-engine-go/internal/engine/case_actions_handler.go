@@ -15,8 +15,9 @@ func RegisterCaseActionsHandler(mux *http.ServeMux, repo *repository.Repository)
 }
 
 type caseActionRequest struct {
-	Action string `json:"action"`
-	Reason string `json:"reason"`
+	Action         string `json:"action"`
+	Reason         string `json:"reason"`
+	FourEyesToken  string `json:"fourEyesToken"`
 }
 
 func handleCaseAction(repo *repository.Repository) http.HandlerFunc {
@@ -52,7 +53,7 @@ func handleCaseAction(repo *repository.Repository) http.HandlerFunc {
 		case "WITHDRAW":
 			err = eng.WithdrawCase(r.Context(), caseID, req.Reason)
 		case "EMERGENCY_CLOSE":
-			err = eng.EmergencyClose(r.Context(), caseID, req.Reason, userID, "")
+			err = eng.EmergencyClose(r.Context(), caseID, req.Reason, userID, req.FourEyesToken)
 		default:
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown action: " + req.Action})
 			return

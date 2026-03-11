@@ -125,7 +125,7 @@ function AssetDetails({ asset, collateral }: { asset: Asset, collateral: Collate
                     )}
                     {asset.titleReference && <p>Title Ref: {asset.titleReference}</p>}
                     <p className="text-xs text-neutral-400">
-                        Ownership: {collateral.securityProviderPartyIds.join(', ')}
+                        Ownership: {collateral.securityProviderPartyIds?.join(', ') ?? 'N/A'}
                     </p>
                 </div>
             }
@@ -185,13 +185,13 @@ function FacilityTree({ facility, security }: { facility: Facility, security?: D
                         isLeaf
                         icon={<Banknote className="size-3.5" />}
                         title="Interest Rate Schedule"
-                        subtitle={`${facility.pricing.rateType} Rate • Index: ${facility.pricing.index.replace(/_/g, ' ')}`}
+                        subtitle={`${facility.pricing.rateType} Rate${facility.pricing.index ? ` • Index: ${facility.pricing.index.replace(/_/g, ' ')}` : ''}`}
                         badge={
                             <div className="text-right">
                                 <p className="font-semibold text-neutral-900 dark:text-neutral-100">
                                     {facility.pricing.interestRate * 100}%
                                 </p>
-                                <p className="text-xs text-neutral-500">Margin: {facility.pricing.margin * 100}%</p>
+                                {facility.pricing.margin != null && <p className="text-xs text-neutral-500">Margin: {facility.pricing.margin * 100}%</p>}
                             </div>
                         }
                     />
@@ -209,7 +209,7 @@ function FacilityTree({ facility, security }: { facility: Facility, security?: D
                                 <p className="font-semibold text-neutral-900 dark:text-neutral-100">
                                     {facility.term.termMonths} Months
                                 </p>
-                                <p className="text-xs text-neutral-500">Ends {formatDate(facility.term.endDate)}</p>
+                                {facility.term.endDate && <p className="text-xs text-neutral-500">Ends {formatDate(facility.term.endDate)}</p>}
                             </div>
                         }
                     />

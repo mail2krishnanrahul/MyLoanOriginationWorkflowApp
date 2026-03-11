@@ -1,6 +1,6 @@
-import { Copy, ShieldAlert } from 'lucide-react';
+import { Copy, ShieldAlert, UserMinus } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { useParams, useSearchParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { OverviewTab } from '@/components/cases/tabs/OverviewTab';
 import { TasksTab } from '@/components/cases/tabs/TasksTab';
@@ -53,6 +53,7 @@ function slaProgressClass(remainingMinutes: number) {
 
 export default function CaseDetailPage() {
   const { caseId = '' } = useParams();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const tab = searchParams.get('tab') ?? 'overview';
 
@@ -60,7 +61,7 @@ export default function CaseDetailPage() {
   const tasksQuery = useCaseTasks(caseId);
   const caseAction = useCaseAction(caseId);
 
-  const [confirmAction, setConfirmAction] = useState<'SUSPEND' | 'WITHDRAW' | 'EMERGENCY_CLOSE' | null>(null);
+  const [confirmAction, setConfirmAction] = useState<'SUSPEND' | 'WITHDRAW' | 'EMERGENCY_CLOSE' | 'RELEASE' | null>(null);
   const [taskWorkbenchTaskId, setTaskWorkbenchTaskId] = useState<string | undefined>();
 
   const nextTaskId = useMemo(() => {
@@ -114,6 +115,12 @@ export default function CaseDetailPage() {
           </div>
 
           <div className="flex items-center gap-2">
+            {caseDetail.status === 'IN_PROGRESS' && (
+              <Button variant="ghost" size="sm" onClick={() => setConfirmAction('RELEASE')}>
+                <UserMinus className="size-4" aria-hidden="true" />
+                Release to Pool
+              </Button>
+            )}
             <Button variant="ghost" size="sm" onClick={() => setConfirmAction('SUSPEND')}>
               Suspend
             </Button>
@@ -184,9 +191,17 @@ export default function CaseDetailPage() {
 
       <ConfirmDialog
         open={Boolean(confirmAction)}
-        title={`${confirmAction?.replaceAll('_', ' ') ?? ''} case`}
-        description="This action is audited and may impact downstream approvals."
-        confirmLabel="Proceed"
+        title={
+          confirmAction === 'RELEASE'
+            ? 'Release case to pool'
+            : `${confirmAction?.replaceAll('_', ' ') ?? ''} case`
+        }
+        description={
+          confirmAction === 'RELEASE'
+            ? 'This will unassign you from the case and return it to the allocation pool. Another team member can then pick it up via GetNext.'
+            : 'This action is audited and may impact downstream approvals.'
+        }
+        confirmLabel={confirmAction === 'RELEASE' ? 'Release' : 'Proceed'}
         confirmVariant={confirmAction === 'EMERGENCY_CLOSE' ? 'danger' : 'primary'}
         loading={caseAction.isPending}
         onConfirm={async () => {
@@ -194,8 +209,13 @@ export default function CaseDetailPage() {
             return;
           }
 
-          await caseAction.mutateAsync({ action: confirmAction });
+          const action = confirmAction;
+          await caseAction.mutateAsync({ action });
           setConfirmAction(null);
+
+          if (action === 'RELEASE') {
+            navigate('/cases');
+          }
         }}
         onCancel={() => setConfirmAction(null)}
       />

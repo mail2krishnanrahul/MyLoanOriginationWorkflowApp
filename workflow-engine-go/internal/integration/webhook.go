@@ -107,7 +107,7 @@ func EnqueueWebhookDeliveries(
 		SELECT
 			subscription_id,
 			tenant_id,
-			$2,
+			$2::text,
 			$3::jsonb,
 			'PENDING',
 			0,
@@ -118,7 +118,7 @@ func EnqueueWebhookDeliveries(
 		  AND status = 'ACTIVE'
 		  AND (
 			COALESCE(array_length(event_types, 1), 0) = 0
-			OR $2 = ANY(event_types)
+			OR $2::text = ANY(event_types)
 		  )
 	`, tenantID, string(event.EventType), payload)
 	if err != nil {
@@ -176,7 +176,7 @@ func EnqueueWebhookDeliveriesPGX(
 		SELECT
 			subscription_id,
 			tenant_id,
-			$2,
+			$2::text,
 			$3::jsonb,
 			'PENDING',
 			0,
@@ -187,7 +187,7 @@ func EnqueueWebhookDeliveriesPGX(
 		  AND status = 'ACTIVE'
 		  AND (
 			COALESCE(array_length(event_types, 1), 0) = 0
-			OR $2 = ANY(event_types)
+			OR $2::text = ANY(event_types)
 		  )
 	`, tenantID, string(event.EventType), payload)
 	if err != nil {

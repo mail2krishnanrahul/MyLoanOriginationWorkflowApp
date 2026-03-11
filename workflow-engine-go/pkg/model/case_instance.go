@@ -17,7 +17,8 @@ const (
 	CaseStatusSuspended  = "SUSPENDED"
 	CaseStatusRejected   = "REJECTED"
 	CaseStatusCloned     = "CLONED"
-	CaseStatusException  = "EXCEPTION"
+	CaseStatusException   = "EXCEPTION"
+	CaseStatusAllocatable = "ALLOCATABLE"
 )
 
 // ---------------------------------------------------------------------------

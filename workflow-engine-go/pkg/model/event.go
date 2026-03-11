@@ -125,6 +125,7 @@ const (
 	EventCaseAllocatable            EventType = "CASE_ALLOCATABLE"
 	EventCaseAllocated              EventType = "CASE_ALLOCATED"
 	EventCaseUnallocated            EventType = "CASE_UNALLOCATED"
+	EventCaseReleased               EventType = "CASE_RELEASED"
 	EventCaseDocumentsFetched       EventType = "CASE_DOCUMENTS_FETCHED"
 	EventDocumentErrorTagged        EventType = "DOCUMENT_ERROR_TAGGED"
 	EventDocumentErrorResolved      EventType = "DOCUMENT_ERROR_RESOLVED"

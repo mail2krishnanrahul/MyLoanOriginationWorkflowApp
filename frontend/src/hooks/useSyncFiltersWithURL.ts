@@ -1,11 +1,13 @@
 import { useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useCaseListStore } from '@/stores/caseListStore';
+import { useUiStore } from '@/store/ui-store';
 import type { CaseListFilters, CaseStatus, CasePriority, CaseComplexity, SkillCode } from '@/types/cases';
 
 export function useSyncFiltersWithURL() {
     const [searchParams, setSearchParams] = useSearchParams();
     const store = useCaseListStore();
+    const caseScope = useUiStore((s) => s.caseScope);
     const isInitialized = useRef(false);
 
     // Sync URL to Store (on mount)
@@ -19,19 +21,34 @@ export function useSyncFiltersWithURL() {
         const complexities = searchParams.getAll('complexity') as CaseComplexity[];
         const skillCodes = searchParams.getAll('skill') as SkillCode[];
 
+        // When URL has no assignedToMe/teamId params, derive defaults from caseScope
+        const hasAssignedParam = searchParams.has('assignedToMe');
+        const hasTeamParam = searchParams.has('teamId');
+
+        let assignedToMe = false;
+        let teamId: string | null = null;
+        if (hasAssignedParam || hasTeamParam) {
+            assignedToMe = searchParams.get('assignedToMe') === 'true';
+            teamId = searchParams.get('teamId');
+        } else {
+            // No URL params — use caseScope defaults
+            assignedToMe = caseScope === 'my';
+            teamId = caseScope === 'team' ? 'current' : null;
+        }
+
         const filters: CaseListFilters = {
             search,
             statuses,
             priorities,
             complexities,
             skillCodes,
-            assignedToMe: searchParams.get('assignedToMe') === 'true',
+            assignedToMe,
             hasBlockingErrors: searchParams.get('hasBlockingErrors') === 'true',
             isVip: searchParams.get('isVip') === 'true',
             slaDueBefore: searchParams.get('slaDueBefore'),
             createdAfter: searchParams.get('createdAfter'),
             createdBefore: searchParams.get('createdBefore'),
-            teamId: searchParams.get('teamId'),
+            teamId,
         };
 
         store.setAllFilters(filters, urlPage);

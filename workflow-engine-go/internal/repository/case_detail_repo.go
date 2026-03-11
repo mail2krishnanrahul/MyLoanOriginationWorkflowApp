@@ -275,7 +275,7 @@ func (r *Repository) UpdateCaseSummary(ctx context.Context, caseID string, p Pat
 
 	if p.Complexity != nil {
 		if *p.Complexity == "" {
-			addArg("case_complexity = NULL", nil) // clear
+			setClauses = append(setClauses, "case_complexity = NULL")
 		} else {
 			addArg("case_complexity = $%d::case_complexity", *p.Complexity)
 		}

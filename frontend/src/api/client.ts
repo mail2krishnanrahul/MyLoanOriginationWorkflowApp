@@ -19,9 +19,18 @@ api.interceptors.request.use(
             config.headers.Authorization = `Bearer ${token}`;
         }
 
-        // Inject default Tenant ID for local development
+        // Inject Tenant ID
         if (config.headers) {
             config.headers['X-Tenant-ID'] = import.meta.env.VITE_TENANT_ID || 'DEFAULT';
+        }
+
+        // Inject User ID — required by backend TenantMiddleware to populate UserIDFromContext.
+        // Reads from localStorage so a real auth flow can set it; falls back to seeded dev user.
+        if (config.headers) {
+            const userId = localStorage.getItem('user_id')
+                || import.meta.env.VITE_USER_ID
+                || '11111111-1111-1111-1111-111111111111';
+            config.headers['X-User-ID'] = userId;
         }
 
         return config;

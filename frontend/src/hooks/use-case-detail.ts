@@ -13,7 +13,7 @@ export function useCaseDetail(caseId: string) {
 }
 
 interface CaseActionPayload {
-  action: 'SUSPEND' | 'WITHDRAW' | 'EMERGENCY_CLOSE';
+  action: 'SUSPEND' | 'WITHDRAW' | 'EMERGENCY_CLOSE' | 'RELEASE';
   reason?: string;
 }
 

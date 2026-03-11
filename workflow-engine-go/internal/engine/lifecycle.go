@@ -29,9 +29,10 @@ func (e *Engine) ValidateLifecycleTransition(
 			model.CaseStatusSuspended:  true,
 		},
 		model.CaseStatusInProgress: {
-			model.CaseStatusCompleted: true,
-			model.CaseStatusCancelled: true, // Withdrawal or Emergency Close
-			model.CaseStatusSuspended: true,
+			model.CaseStatusCompleted:   true,
+			model.CaseStatusCancelled:   true, // Withdrawal or Emergency Close
+			model.CaseStatusSuspended:   true,
+			model.CaseStatusAllocatable: true, // Release back to pool
 		},
 		model.CaseStatusSuspended: {
 			model.CaseStatusInProgress: true, // Resume
@@ -558,6 +559,67 @@ func appendCaseSLAResumeLogs(ctx context.Context, repoIface Repository, tx pgx.T
 	}
 
 	return nil
+}
+
+// ReleaseCase releases an assigned case back to the allocation pool.
+// The case status reverts to ALLOCATABLE and assigned_user_id is cleared,
+// making it available for GetNext to redistribute.
+func (e *Engine) ReleaseCase(ctx context.Context, caseID string, userID string) error {
+	return e.Repo.WithTransaction(ctx, func(tx pgx.Tx) error {
+		c, err := e.Repo.GetCaseInstanceWithLock(ctx, tx, caseID)
+		if err != nil {
+			return err
+		}
+
+		if err := e.ValidateLifecycleTransition(ctx, c.Status, model.CaseStatusAllocatable, userID); err != nil {
+			return err
+		}
+
+		// Clear assignment and revert to ALLOCATABLE so GetNext can re-distribute.
+		_, err = tx.Exec(ctx, `
+			UPDATE cases
+			SET status           = 'ALLOCATABLE',
+			    assigned_user_id = NULL,
+			    row_version      = row_version + 1,
+			    updated_at       = now()
+			WHERE id = $1::uuid`, caseID)
+		if err != nil {
+			return fmt.Errorf("ReleaseCase: failed to update case: %w", err)
+		}
+
+		// Reset in-flight tasks to PENDING and clear their assignments
+		// so they can be re-assigned when the case is next claimed.
+		_, err = tx.Exec(ctx, `
+			UPDATE tasks
+			SET status           = 'PENDING',
+			    assigned_service = NULL,
+			    assignee_id      = NULL,
+			    assigned_at      = NULL,
+			    updated_at       = now(),
+			    version          = version + 1
+			WHERE case_id = $1::uuid
+			  AND status IN ('ASSIGNED', 'IN_PROGRESS', 'AWAITING_EXTERNAL')`, caseID)
+		if err != nil {
+			return fmt.Errorf("ReleaseCase: failed to reset tasks: %w", err)
+		}
+
+		payload := map[string]interface{}{
+			"case_id":     caseID,
+			"released_by": userID,
+			"released_at": time.Now().UTC(),
+		}
+		plBytes, err := json.Marshal(payload)
+		if err != nil {
+			return fmt.Errorf("ReleaseCase: failed to marshal payload: %w", err)
+		}
+
+		return e.Repo.PublishEvent(ctx, tx, model.Event{
+			CaseID:    &caseID,
+			EventType: model.EventCaseReleased,
+			Status:    model.EventStatusPending,
+			Payload:   plBytes,
+		})
+	})
 }
 
 // WithdrawCase cancels a case by applicant request and cancels all open tasks.

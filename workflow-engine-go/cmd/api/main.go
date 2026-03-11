@@ -106,6 +106,7 @@ func main() {
 	engine.RegisterCaseHandlers(apiMux, repo)
 	engine.RegisterCaseListHandler(apiMux, repo)
 	engine.RegisterCaseDetailHandler(apiMux, repo)
+	engine.RegisterCaseActionsHandler(apiMux, repo)
 	engine.RegisterAuditHandlers(apiMux, repo)
 	engine.RegisterWorkbasketHandlers(apiMux, repo)
 	getnext.RegisterGetNextHandlers(apiMux, pgxDB.Pool)

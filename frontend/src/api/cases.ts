@@ -1,5 +1,5 @@
 import { ApiClient, api } from './client';
-import type { CaseListFilters, CaseListResponse, CaseListItem, CaseTagSummary, CaseSummaryStats } from '@/types/cases';
+import type { CaseListFilters, CaseListResponse, CaseListItem, CaseTagSummary, CaseSummaryStats, UserSummary } from '@/types/cases';
 import { deriveTagCategory } from '@/types/cases';
 
 export interface Case {
@@ -47,6 +47,7 @@ interface BackendCaseListItem {
     priority: string | null;
     borrowerName: string | null;
     assignedTo: string | null;
+    assignedToName: string | null;
     slaStatus: string;
     slaRemainingMinutes: number;
     createdAt: string;
@@ -59,6 +60,16 @@ interface BackendCaseListResponse {
     total: number;
     page: number;
     limit: number;
+}
+
+function buildUserSummary(userId: string | null, displayName: string | null): UserSummary | null {
+    if (!userId) return null;
+    const name = displayName || userId.substring(0, 8);
+    const parts = name.trim().split(/\s+/);
+    const initials = parts.length >= 2
+        ? (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+        : name.substring(0, 2).toUpperCase();
+    return { userId, displayName: name, initials };
 }
 
 function mapBackendItemToFrontend(item: BackendCaseListItem): CaseListItem {
@@ -93,7 +104,7 @@ function mapBackendItemToFrontend(item: BackendCaseListItem): CaseListItem {
         complexity,
         requiredSkills: [],
         tags: tags.filter(t => t.category !== 'COMPLEXITY'),
-        assignedUser: null,
+        assignedUser: buildUserSummary(item.assignedTo, item.assignedToName),
         slaDueAt,
         createdAt: item.createdAt,
         updatedAt: item.updatedAt,

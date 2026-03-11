@@ -42,6 +42,7 @@ type CaseListItem struct {
 	Priority        *string       `json:"priority"`
 	BorrowerName    *string       `json:"borrowerName"`
 	AssignedTo      *string       `json:"assignedTo"`
+	AssignedToName  *string       `json:"assignedToName"`
 	SLAStatus       string        `json:"slaStatus"`
 	SLARemainingMin float64       `json:"slaRemainingMinutes"`
 	CreatedAt       string        `json:"createdAt"`
@@ -203,14 +204,16 @@ func (r *Repository) ListCases(ctx context.Context, filters CaseListFilters) (*L
 			c.metadata->>'priority',
 			c.metadata->>'borrower_name',
 			c.assigned_user_id::text,
+			u.display_name AS assigned_to_name,
 			%s AS sla_status,
 			COALESCE(%s, 0) AS sla_remaining_minutes,
 			to_char(c.created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
 			to_char(c.updated_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
 		FROM cases c
 		JOIN case_types ct ON ct.id = c.case_type_id
+		LEFT JOIN users u ON u.id = c.assigned_user_id::text
 		%s
-		GROUP BY c.id, ct.code
+		GROUP BY c.id, ct.code, u.display_name
 		%s
 		ORDER BY c.updated_at DESC
 		LIMIT $%d OFFSET $%d
@@ -229,6 +232,7 @@ func (r *Repository) ListCases(ctx context.Context, filters CaseListFilters) (*L
 			&item.CaseID, &item.ReferenceNumber, &item.CaseType,
 			&item.Status, &item.CurrentStage,
 			&item.Priority, &item.BorrowerName, &item.AssignedTo,
+			&item.AssignedToName,
 			&item.SLAStatus, &item.SLARemainingMin,
 			&item.CreatedAt, &item.UpdatedAt,
 		); err != nil {
